@@ -103,12 +103,48 @@
     } catch (_) { return ''; }
   }
 
+  /** 显卡状态一变（探测到名字 / 定了后端 / 编码器确认硬件编码）就通知界面 */
+  const gpuListeners = new Set();
+  function notifyGpu() {
+    const report = gpuReport();
+    gpuListeners.forEach((fn) => {
+      try { fn(report); } catch (_) { /* 界面自己的错不该影响渲染 */ }
+    });
+  }
+
   function rememberAdapter(name, source) {
     if (!name || gpu.adapter) return;
     gpu.adapter = name;
     gpu.source = source;
     gpu.kind = classifyAdapter(name);
     gpu.discrete = gpu.kind === 'discrete';
+    notifyGpu();
+  }
+
+  /**
+   * 一句话结论：面板和徽标都用它。
+   * 注意「读不到名字」不等于没请求 —— 请求已经发了，只是浏览器没暴露适配器信息。
+   */
+  function gpuReport() {
+    const kind = gpu.adapter ? gpu.kind : 'unknown';
+    const verdict = kind === 'discrete' ? 'ok'
+      : kind === 'integrated' ? 'integrated'
+        : kind === 'software' ? 'software' : 'unknown';
+    const headline = verdict === 'ok' ? '正在使用独立显卡'
+      : verdict === 'integrated' ? '正在使用集成显卡'
+        : verdict === 'software' ? '正在用软件光栅化（最慢）'
+          : '读不到显卡名称（已请求高性能）';
+    return {
+      adapter: gpu.adapter || '',
+      kind,
+      verdict,
+      discrete: kind === 'discrete',
+      source: gpu.source,
+      backend: state.backend || gpu.backend || '',
+      hwEncode: gpu.hwEncode,
+      requested: HP,
+      headline,
+    };
   }
 
   /** 2D 上下文：也带上高性能偏好（不支持该字段的浏览器会直接忽略） */
@@ -980,6 +1016,7 @@ void main() {
     });
     encoder.configure({ ...cfg, codec: codec.codec, hardwareAcceleration: codec.hardwareAcceleration || 'no-preference' });
     gpu.hwEncode = codec.hardwareAcceleration === 'prefer-hardware';
+    notifyGpu();
     const gop = Math.max(1, Math.round(cfg.framerate));
     return {
       kind: 'webcodecs',
@@ -1065,7 +1102,8 @@ void main() {
     sink: null,
     video: null,
     phase: 'idle',
-    backend: 'canvas2d',
+    // 空 = 还没渲染过（真正的后端在第一次 createScene 时才定下来）
+    backend: '',
   };
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1140,6 +1178,7 @@ void main() {
         preferGL, gridHint, persp, glare,
       });
       state.backend = scene.backend;
+      notifyGpu();
 
       const bitrate = Math.round(Math.min(24e6, Math.max(4e6, W * H * fps * 0.18)));
       // prefer-hardware：明确要求硬件编码板（有独显时跟随 GPU 进程的适配器）。
@@ -1323,6 +1362,14 @@ void main() {
         hwEncode: gpu.hwEncode,
         backend: state.backend || gpu.backend,
       };
+    },
+    /** 显卡结论（面板/徽标用） */
+    gpuReport,
+    /** 订阅显卡状态变化，返回取消订阅函数 */
+    onGpuChange(fn) {
+      gpuListeners.add(fn);
+      try { fn(gpuReport()); } catch (_) {}
+      return () => gpuListeners.delete(fn);
     },
     /** 手动再探一次（页面加载后设备热切换、或想读最新名字时用） */
     probeGPU,

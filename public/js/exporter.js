@@ -116,7 +116,8 @@
     canvas.width = w;
     canvas.height = h;
     state.canvas = canvas;
-    state.ctx = canvas.getContext('2d', { alpha: false });
+    // 和主渲染链路一致的显卡偏好：没有独显时浏览器会自然退回集显
+    state.ctx = canvas.getContext('2d', { alpha: false, powerPreference: 'high-performance' });
     state.ctx.imageSmoothingQuality = 'high';
 
     // 真正的录制从这一刻开始：先让调用方收起一切不该出现在画面里的 UI

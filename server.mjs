@@ -9,9 +9,11 @@
  * 零依赖，只用 Node 内置模块。
  */
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { snapshot as gpuSnapshot, setLevel as gpuSetLevel, clearLevel as gpuClearLevel, isWindows as gpuIsWindows } from './gpu-prefs.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, 'public');
@@ -367,6 +369,131 @@ async function handleStatic(req, res) {
   }
 }
 
+/* ───────────────────── 显卡偏好接口 ───────────────────── */
+/*
+ * 网页只能「请求」高性能适配器，不能指定用哪块卡；真正说了算的是系统和浏览器。
+ * Windows 上那个开关（设置 → 系统 → 显示 → 显卡）就是写 HKCU 里的
+ * UserGpuPreferences，所以这里提供一个**本机、需同源、需令牌**的接口替用户写一次。
+ *
+ * 防滥用：
+ *   · 令牌在进程启动时生成，只能通过同源 GET /api/gpu/session 读到（跨域读不到响应体）
+ *   · POST 必须带 x-lm-token，且 Origin 必须是本服务自己的来源
+ *   · 只接受「绝对路径的 .exe」或 UWP AUMID，写之前校验、写之后读回校验
+ */
+const GPU_TOKEN = crypto.randomBytes(16).toString('hex');
+const GPU_ORIGINS = new Set([ORIGIN, `http://127.0.0.1:${PORT}`]);
+
+function sendJson(res, code, obj) {
+  const body = JSON.stringify(obj);
+  res.writeHead(code, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(body),
+    'Cache-Control': 'no-store',
+  });
+  res.end(body);
+}
+
+function readBody(req, limit = 8192) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limit) { reject(new Error('body too large')); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
+/** 只允许本机回环：局域网里的其它机器不该能改写这台机器的显卡设置 */
+function isLoopback(req) {
+  const ip = (req.socket && req.socket.remoteAddress) || '';
+  return ip === '::1' || /^127\./.test(ip) || /^::ffff:127\./.test(ip);
+}
+
+function sameOrigin(req) {
+  const origin = req.headers.origin;
+  if (origin && !GPU_ORIGINS.has(origin)) return false;
+  const site = req.headers['sec-fetch-site'];
+  if (site && site !== 'same-origin' && site !== 'none') return false;
+  return true;
+}
+
+async function handleGpuApi(req, res) {
+  const route = new URL(req.url, ORIGIN).pathname.replace(/\/+$/, '');
+  const ua = req.headers['user-agent'] || '';
+
+  // 会话令牌只发给本机：远程拿到令牌也改写不了这台机器的注册表
+  if (!isLoopback(req)) {
+    return sendJson(res, 403, { ok: false, error: '显卡设置只允许在本机操作' });
+  }
+
+  if (route === '/api/gpu/session' && req.method === 'GET') {
+    return sendJson(res, 200, { token: GPU_TOKEN, platform: process.platform, windows: gpuIsWindows() });
+  }
+
+  if (route === '/api/gpu/status' && req.method === 'GET') {
+    try {
+      const snap = await gpuSnapshot(ua);
+      return sendJson(res, 200, { ok: true, windows: gpuIsWindows(), ...snap });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, error: err.message });
+    }
+  }
+
+  const isWrite = route === '/api/gpu/apply' || route === '/api/gpu/restore';
+  if (!isWrite) return sendJson(res, 404, { ok: false, error: 'unknown route' });
+  if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
+  if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: 'cross-origin refused' });
+  if (req.headers['x-lm-token'] !== GPU_TOKEN) {
+    return sendJson(res, 403, { ok: false, error: '缺少或错误的会话令牌（刷新页面再试）' });
+  }
+  if (!gpuIsWindows()) {
+    return sendJson(res, 501, { ok: false, error: '一键切换只支持 Windows；其它系统请按面板里的手动步骤' });
+  }
+
+  let body = {};
+  try {
+    const raw = await readBody(req);
+    body = raw ? JSON.parse(raw) : {};
+  } catch (_) {
+    return sendJson(res, 400, { ok: false, error: '请求体不是合法 JSON' });
+  }
+
+  try {
+    const snap = await gpuSnapshot(ua);
+    const targets = body.exe
+      ? [String(body.exe)]
+      : snap.browsers.filter((b) => b.matchesUA).map((b) => b.exe);
+    if (!targets.length) {
+      return sendJson(res, 409, {
+        ok: false,
+        error: '没找到正在使用的浏览器路径',
+        browsers: snap.browsers,
+      });
+    }
+    const results = [];
+    for (const exe of targets) {
+      if (route === '/api/gpu/apply') {
+        const lvl = Number.isFinite(Number(body.level)) ? Number(body.level) : 2;
+        results.push(await gpuSetLevel(exe, lvl));
+      } else {
+        results.push(await gpuClearLevel(exe));
+      }
+    }
+    return sendJson(res, 200, {
+      ok: true,
+      action: route === '/api/gpu/apply' ? 'apply' : 'restore',
+      results,
+      needsRestart: true,
+    });
+  } catch (err) {
+    return sendJson(res, 500, { ok: false, error: err.message });
+  }
+}
+
 /* ───────────────────────── 启动 ───────────────────────── */
 
 const server = http.createServer(async (req, res) => {
@@ -375,6 +502,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*' });
       return res.end();
     }
+    if (req.url.startsWith('/api/gpu/')) return await handleGpuApi(req, res);
     if (req.url.startsWith('/p/')) return await handleProxy(req, res);
     // 只有编辑器自己的请求才应答 /api/ping：被代理页面也可能有同名接口，不能抢
     if (req.url === '/api/ping' && !(req.headers.referer || '').includes('/p/')) {

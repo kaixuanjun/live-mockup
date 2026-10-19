@@ -914,3 +914,116 @@ body.exporting .stage__foot { display: none !important; }
   .layout { grid-template-columns: 220px minmax(0, 1fr) 250px; }
 }
 
+/* ───────────── 显卡徽标 / 面板 ───────────── */
+
+.gpubtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.gpubtn__dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.gpubtn.is-ok { color: #7ee2a8; border-color: rgba(55,214,122,.45); }
+.gpubtn.is-warn { color: #ffd48a; border-color: rgba(242,178,60,.45); }
+.gpubtn.is-bad { color: #ff9a9a; border-color: rgba(239,91,91,.45); }
+.gpubtn.is-dim { color: #9aa0b4; }
+
+.gpumask {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(6,7,11,.66);
+  backdrop-filter: blur(10px);
+}
+.gpumask.is-open { display: flex; }
+
+.gpucard {
+  width: min(620px, 100%);
+  max-height: min(86vh, 780px);
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, #1b1d26, #14151c);
+  border: 1px solid rgba(255,255,255,.10);
+  border-radius: 16px;
+  box-shadow: 0 26px 70px rgba(0,0,0,.6);
+  color: #e7e9f2;
+  overflow: hidden;
+}
+.gpucard__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(255,255,255,.07);
+}
+.gpucard__head h3 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: .02em; }
+.gpucard__x {
+  background: transparent; border: 0; color: #8b90a3; font-size: 14px;
+  cursor: pointer; padding: 4px 6px; border-radius: 6px;
+}
+.gpucard__x:hover { background: rgba(255,255,255,.08); color: #dfe2ec; }
+
+.gpucard__body { padding: 16px 18px 18px; overflow: auto; }
+
+.gpu-head { display: flex; align-items: center; gap: 9px; font-size: 16px; font-weight: 600; }
+.gpu-head__dot { width: 9px; height: 9px; border-radius: 50%; }
+.gpu-head.is-ok { color: #86ecb2; }
+.gpu-head.is-warn { color: #ffd68f; }
+.gpu-head.is-bad { color: #ff9f9f; }
+.gpu-head.is-dim { color: #a9aec2; }
+
+.gpu-kv { margin: 14px 0 0; display: grid; gap: 7px; }
+.gpu-kv > div { display: grid; grid-template-columns: 84px 1fr; gap: 10px; align-items: baseline; }
+.gpu-kv dt { color: #8b90a3; font-size: 12px; }
+.gpu-kv dd { margin: 0; font-size: 12.5px; word-break: break-word; }
+
+.gpu-fact {
+  margin: 14px 0 0; padding: 10px 12px; font-size: 12px; line-height: 1.65;
+  color: #b9bed0; background: rgba(124,92,255,.10);
+  border: 1px solid rgba(124,92,255,.22); border-radius: 10px;
+}
+
+.gpu-sec { margin-top: 16px; }
+.gpu-sec__t { font-size: 12px; color: #9aa0b4; margin-bottom: 8px; letter-spacing: .02em; }
+.gpu-dim { color: #8b90a3; font-size: 12px; }
+.gpu-note { margin: 8px 0 0; line-height: 1.6; }
+.gpu-inline { margin: 8px 0 0; }
+.gpu-inline--ok { color: #86ecb2; }
+.gpu-inline--bad { color: #ff9f9f; }
+
+.gpu-browsers { display: grid; gap: 8px; }
+.gpu-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 9px 11px; border-radius: 10px;
+  background: rgba(255,255,255,.035); border: 1px solid rgba(255,255,255,.07);
+}
+.gpu-row__name { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; min-width: 0; }
+.gpu-row__title { display: inline-flex; align-items: center; gap: 5px; }
+.gpu-row__name em {
+  font-style: normal; font-size: 10px; line-height: 1.5; padding: 0 5px; border-radius: 5px;
+  background: rgba(124,92,255,.22); color: #c9bcff; flex: 0 0 auto;
+}
+.gpu-row__name span { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gpu-row__act { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.gpu-row__act .mini { font-size: 11px; padding: 4px 8px; }
+.gpu-row__act .mini:disabled { opacity: .38; cursor: default; }
+
+.gpu-pill {
+  font-size: 11px; padding: 2px 7px; border-radius: 6px;
+  background: rgba(255,255,255,.07); color: #a9aec2;
+}
+.gpu-pill.is-ok { background: rgba(55,214,122,.16); color: #8ff0b8; }
+.gpu-pill.is-warn { background: rgba(242,178,60,.16); color: #ffd68f; }
+
+.gpu-manual summary { cursor: pointer; font-size: 12px; color: #9aa0b4; }
+.gpu-manual summary:hover { color: #dfe2ec; }
+.gpu-manual ul { margin: 10px 0 0; padding-left: 18px; display: grid; gap: 7px; }
+.gpu-manual li { font-size: 12px; line-height: 1.6; color: #b9bed0; }
+.gpu-manual code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+  background: rgba(255,255,255,.07); padding: 1px 5px; border-radius: 4px;
+}

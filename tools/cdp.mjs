@@ -50,7 +50,7 @@ class CDP {
   }
 }
 
-export async function launch({ port = 9333, width = 1600, height = 1000, shotsDir = '.shots' } = {}) {
+export async function launch({ port = 9333, width = 1600, height = 1000, shotsDir = '.shots', gpu = false } = {}) {
   const profile = join(tmpdir(), 'lm-cdp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7));
   const shots = join(import.meta.dirname, '..', shotsDir);
   mkdirSync(shots, { recursive: true });
@@ -59,7 +59,8 @@ export async function launch({ port = 9333, width = 1600, height = 1000, shotsDi
     EDGE,
     [
       '--headless=new',
-      '--disable-gpu',
+      // 默认关掉 GPU（软件光栅化，结果稳定）；gpu:true 时用真实显卡，用来验证适配器探测
+      ...(gpu ? [] : ['--disable-gpu']),
       '--hide-scrollbars',
       '--no-first-run',
       '--no-default-browser-check',

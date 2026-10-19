@@ -162,6 +162,42 @@ node server.mjs        # 或 npm start
 EBML / Cluster / Cues 全手写，零依赖）。WebCodecs 需要安全上下文：`localhost` 可以，
 用局域网 IP 的 http 打开就没有 —— 这时自动退回实时录制，弹窗会写明「可能丢帧」。
 
+## 显卡：怎样让页面用上独立显卡
+
+先把边界说清楚：**网页不能指定用哪块显卡。** 页面唯一能做的动作是"请求"——
+`canvas.getContext('webgl2', { powerPreference: 'high-performance' })`、
+`navigator.gpu.requestAdapter({ powerPreference: 'high-performance' })`。
+最终由浏览器和系统决定，所以这个项目从三个方向一起下手：
+
+| 层 | 做法 | 位置 |
+| --- | --- | --- |
+| 请求 | 每个图形上下文都带 `high-performance`（WebGL2/WebGL、2D、实时录制的兜底画布），编码器用 `prefer-hardware` | `render.js` / `exporter.js` |
+| 探测 | 读 `WEBGL_debug_renderer_info` / WebGPU 适配器，判断落到独显、集显还是软件光栅化 | `render.js` 的 `gpuReport()` |
+| 落地 | 顶栏「显卡」徽标一直显示当前状态；点开面板能一键把浏览器设成「高性能」（Windows） | `gpu-panel.js` / `gpu-prefs.mjs` |
+
+### 一键切换（Windows）
+
+设置 → 系统 → 显示 → 显卡 里那个开关，写的就是
+`HKCU\Software\Microsoft\DirectX\UserGpuPreferences`：
+值名是可执行文件完整路径，值是 `GpuPreference=2;`（0=让 Windows 决定，1=省电，2=高性能）。
+面板里的「设为高性能」就是替你写这一项，只改当前用户、不需要管理员，同一项里的
+其它开关（`AutoHDREnable`、`SwapEffectUpgradeEnable`…）原样保留，「还原」会删掉这一项。
+
+**必须完全退出浏览器（所有窗口）再打开**，GPU 进程才会按新偏好重建 ——
+只关标签页没用。
+
+接口的安全边界：只接受本机回环地址、必须带启动时生成且只发给同源的会话令牌、
+校验 Origin，路径白名单（绝对路径 `.exe` 或 UWP AUMID），写完立刻读回校验。
+
+### 其它系统
+
+macOS / Linux 的显卡选择在驱动层，浏览器不给页面开这个口子，面板里直接给手动步骤：
+接电源 + 关闭「自动切换图形卡」（macOS）、`DRI_PRIME=1` / `__NV_PRIME_RENDER_OFFLOAD=1`（Linux）、
+NVIDIA / AMD 控制面板给浏览器指定高性能处理器。笔记本的「省电模式」也会强行压回集显。
+
+`npm run test:gpu` 会验证：上下文真的带了 `high-performance`、徽标与面板正常、
+无令牌/跨源/非法路径都被拒绝，以及在 Windows 上**真的写进注册表再删掉**（用 notepad.exe 当靶子）。
+
 ## 场景级设置：机型 / 屏幕比例 / 输出比例
 
 这三样属于**场景**，不属于关键帧 —— 整段视频只有一份，关键帧里只存机位
@@ -301,6 +337,7 @@ live-mockup/
     ├── video-test.mjs      # 录屏模式：现造 WebM → 载入 / 自适应尺寸 / 双向同步 / 逐帧导出
     ├── render-test.mjs     # 逐帧渲染内核：帧数 / 时长精度 / 可 seek / 取消 / 无 WebCodecs 兜底
     ├── parity-test.mjs     # 编辑器 vs 渲染一致性：取景比例 / 四角重合 / 反光与贴图 alpha
+    ├── gpu-test.mjs        # 显卡：上下文偏好 / 徽标面板 / 注册表写入与还原
     ├── export-test.mjs     # 导出链路：假屏幕流 → 1080×1920 VP9 webm
     ├── proxy-test.mjs      # 反代：真实外部站点载入 + 注入 + 录制
     └── devserver-test.mjs  # 本地 dev server：根相对接口 / 图片 / ESM 导入 / 无协议地址
@@ -316,6 +353,7 @@ npm run test:keyframe      # 关键帧：自动插帧 / 曲线 / 保持 / 复制
 npm run test:video         # 录屏模式：页内现造 WebM → 载入 / 自适应分辨率 / 时间轴双向同步
 npm run test:render        # 逐帧渲染内核：时长精度 / 每帧都渲染 / 取消 / 可 seek / 兜底
 npm run test:parity        # 编辑器画面 == 渲染画面 + 换窗口构图不变（v2 单位的核心保证）
+npm run test:gpu           # 显卡：高性能偏好 / 徽标面板 / 注册表一键切换的写入与还原
 npm run test:export        # 导出（用假屏幕流，不需要真人点共享）
 npm run test:proxy         # 反代 + 注入 + 第三方页录制
 npm run test:devserver     # 本地 dev server 适配（自建 5199 端口夹具）
