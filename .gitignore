@@ -1,0 +1,4 @@
+﻿.shots/
+*.log
+node_modules/
+

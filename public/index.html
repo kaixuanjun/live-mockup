@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LiveMockup · 样机里的实时网页演示</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%237c5cff'/%3E%3Crect x='9' y='6' width='14' height='20' rx='3' fill='none' stroke='white' stroke-width='2'/%3E%3Ccircle cx='16' cy='22' r='1.4' fill='white'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand__mark"></span>
+    <span class="brand__name">LiveMockup</span>
+  </div>
+
+  <div class="urlbar">
+    <span class="urlbar__icon">⌕</span>
+    <input id="urlInput" type="text" spellcheck="false" placeholder="输入网址，或选择左侧内置演示页">
+    <button id="loadBtn" class="btn btn--solid">载入</button>
+  </div>
+
+  <div class="topbar__spacer"></div>
+
+  <button id="reloadBtn" class="btn btn--ghost" title="重载页面">↻</button>
+  <button id="recordBtn" class="btn btn--rec"><span class="dot"></span>录制操作</button>
+  <button id="playBtn" class="btn btn--ghost btn--icon" title="播放 / 暂停">▶</button>
+  <button id="stillBtn" class="btn btn--ghost" title="把当前播放头这一帧按成片同一套渲染导出成 PNG（排查画质用）">PNG</button>
+  <button id="exportBtn" class="btn btn--accent">导出视频</button>
+</header>
+
+<div class="layout">
+
+  <!-- ───────────── 左：页面 / 样机 / 场景 ───────────── -->
+  <aside class="panel panel--left">
+    <section class="group">
+      <h4>页面</h4>
+      <div class="seg seg--mode" id="modeSeg">
+        <button data-mode="page" class="is-on">网页</button>
+        <button data-mode="video">录屏视频</button>
+      </div>
+
+      <div class="preset-list" id="presetList">
+        <button class="preset" data-demo="/demo/coffee/">
+          <span class="preset__ico">☕️</span>
+          <span><b>Kopi 咖啡点单</b><i>移动端 App · 可交互</i></span>
+        </button>
+        <button class="preset" data-demo="/demo/site/">
+          <span class="preset__ico">🖥</span>
+          <span><b>Aurora 产品官网</b><i>桌面网页 · 可交互</i></span>
+        </button>
+      </div>
+
+      <div class="videobox" id="videoBox" hidden>
+        <button class="dropzone" id="dropZone" type="button">
+          <b>把录屏拖进来</b>
+          <i>或点这里选文件 · mp4 / webm / mov</i>
+        </button>
+        <input type="file" id="videoFile" accept="video/*" hidden>
+        <p class="hint" id="videoMeta">视频会在样机屏幕上播放，时间轴同时驱动镜头。</p>
+      </div>
+
+      <p class="hint" id="pageHint">任意 http/https 网址会经本地代理载入，因此可以录操作、跑脚本。</p>
+    </section>
+
+    <section class="group">
+      <h4>样机</h4>
+      <div class="seg" id="deviceSeg">
+        <button data-device="phone" class="is-on">手机</button>
+        <button data-device="tablet">平板</button>
+        <button data-device="browser">浏览器</button>
+        <button data-device="auto" disabled title="按输入视频的分辨率决定机型尺寸，录屏模式可用">自适应</button>
+      </div>
+      <div class="seg seg--swatch" id="colorSeg">
+        <button data-color="midnight" class="is-on"><i style="--c:#1c1d22"></i>深空</button>
+        <button data-color="silver"><i style="--c:#d8d9de"></i>银</button>
+        <button data-color="sand"><i style="--c:#e8d3b6"></i>米金</button>
+      </div>
+      <label class="check"><input type="checkbox" id="statusBar" checked><span>显示状态栏</span></label>
+      <label class="check"><input type="checkbox" id="glareToggle" checked><span>玻璃反光</span></label>
+    </section>
+
+    <section class="group">
+      <h4>场景</h4>
+      <div class="bg-list" id="bgList">
+        <button data-bg="aurora" class="is-on"><i></i>极光</button>
+        <button data-bg="studio"><i></i>影棚</button>
+        <button data-bg="warm"><i></i>暖阳</button>
+        <button data-bg="paper"><i></i>纸感</button>
+        <button data-bg="night"><i></i>暗场</button>
+        <button data-bg="mint"><i></i>薄荷</button>
+      </div>
+      <div class="field">
+        <label>画幅</label>
+        <select id="aspectSel">
+          <option value="9:16">竖屏 9:16 · 抖音 / 小红书</option>
+          <option value="4:5">方图 4:5 · 信息流</option>
+          <option value="16:9">横屏 16:9 · B 站 / YouTube</option>
+          <option value="1:1">正方形 1:1</option>
+          <option value="auto" disabled>自适应 · 按输入分辨率</option>
+        </select>
+      </div>
+    </section>
+
+    <section class="group">
+      <h4>镜头预设</h4>
+      <div class="moves" id="moveList">
+        <button data-move="push">推向特写</button>
+        <button data-move="orbit">侧身环绕</button>
+        <button data-move="float">悬浮上移</button>
+        <button data-move="breathe">呼吸定格</button>
+        <button data-move="reset">复位居中</button>
+      </div>
+      <p class="hint">一键生成镜头关键帧，再在右侧微调。</p>
+    </section>
+  </aside>
+
+  <!-- ───────────── 中：舞台 ───────────── -->
+  <main class="stagewrap">
+    <div class="stage" id="stage">
+      <div class="stage__bg" id="stageBg"></div>
+      <div class="world" id="world">
+        <div class="device" id="device" data-model="phone" data-color="midnight">
+          <div class="device__body">
+            <div class="device__bezel">
+              <div class="device__screen">
+                <iframe id="frame" title="被演示页面"
+                        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"></iframe>
+                <video id="videoEl" class="device__video" playsinline preload="auto" muted></video>
+                <div class="device__status" id="statusBarUi">
+                  <span class="sb-time" id="sbTime">9:41</span>
+                  <span class="sb-right">
+                    <svg width="17" height="11" viewBox="0 0 17 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="5" width="3" height="6" rx="1"/><rect x="9" y="2.5" width="3" height="8.5" rx="1"/><rect x="13.5" y="0" width="3" height="11" rx="1"/></svg>
+                    <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><path d="M8 10.4 5.2 7.3a4.2 4.2 0 0 1 5.6 0L8 10.4Zm0-4.6c-1.6 0-3.1.55-4.3 1.5L2.1 5.1A8.9 8.9 0 0 1 8 3.2c2.3 0 4.4.7 5.9 1.9l-1.6 2.2A6.9 6.9 0 0 0 8 5.8Zm0-3.4c-2.6 0-5 .9-6.9 2.4L0 3.2A13.4 13.4 0 0 1 8 .8c3 0 5.8.9 8 2.4l-1.1 1.6A11.4 11.4 0 0 0 8 2.4Z"/></svg>
+                    <span class="sb-batt"><i></i></span>
+                  </span>
+                </div>
+                <div class="device__island" id="island"><span></span></div>
+              </div>
+            </div>
+            <div class="device__btn device__btn--vol"></div>
+            <div class="device__btn device__btn--pwr"></div>
+          </div>
+          <div class="device__shadow" aria-hidden="true"></div>
+          <div class="device__glare" id="glare" aria-hidden="true"></div>
+        </div>
+      </div>
+
+      <div class="stage__hint" id="stageHint">拖动旋转 · 滚轮推拉 · 双击复位</div>
+      <div class="stage__loading" id="stageLoading"><span class="spin"></span><span id="stageLoadingText">载入页面…</span></div>
+      <div class="stage__rec" id="recBadge"><span class="dot"></span><span id="recTime">00:00.0</span><em>正在录制操作</em></div>
+    </div>
+    <div class="stage__foot">
+      <span id="frameInfo" class="mono">未载入页面</span>
+      <span class="foot__right">
+        <button class="linkbtn" id="toggleChromeBtn">隐藏面板</button>
+        <span class="mono" id="currentT">00:00.0 / 00:12.0</span>
+      </span>
+    </div>
+  </main>
+
+  <!-- ───────────── 右：检视器 ───────────── -->
+  <aside class="panel panel--right">
+    <section class="group" id="inspector">
+      <h4>检视器</h4>
+      <div id="inspectorBody" class="inspector-empty">
+        <p class="hint">在时间轴上选择镜头关键帧或页面动作，即可在这里微调。</p>
+        <ul class="tips">
+          <li><b>录制操作</b>：在样机里真实点几下，动作会变成时间轴上的点。</li>
+          <li><b>拖动舞台</b>：调整镜头角度。</li>
+          <li><b>+ 关键帧</b>：把当前镜头姿态固定到一个时间点。</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="group">
+      <h4>时间轴</h4>
+      <div class="field">
+        <label>总时长</label>
+        <div class="inline">
+          <input id="durationInput" type="number" min="1" max="120" step="0.5" value="12">
+          <span class="unit">秒</span>
+        </div>
+      </div>
+      <label class="check"><input type="checkbox" id="rippleToggle" checked><span>显示点击涟漪</span></label>
+      <label class="check"><input type="checkbox" id="autoKeyToggle" checked><span>拖动舞台时自动更新关键帧</span></label>
+      <div class="btnrow">
+        <button class="btn btn--ghost" id="addKeyBtn">+ 关键帧</button>
+        <button class="btn btn--ghost" id="delKeyBtn">删除选中</button>
+      </div>
+    </section>
+
+    <section class="group">
+      <h4>工程</h4>
+      <div class="btnrow">
+        <button class="btn btn--ghost" id="saveProjectBtn">保存 JSON</button>
+        <button class="btn btn--ghost" id="openProjectBtn">导入</button>
+      </div>
+      <input type="file" id="projectFile" accept=".json,application/json" hidden>
+      <p class="hint">工程文件只存时间轴与场景，不存网页内容 —— 换数据后重录即可。</p>
+    </section>
+  </aside>
+</div>
+
+<!-- ───────────── 时间轴 ───────────── -->
+<footer class="timeline">
+  <div class="timeline__bar">
+    <button class="btn btn--ghost btn--icon" id="tlPlayBtn" title="播放/暂停">▶</button>
+    <span class="mono tl-time" id="tlTime">00:00.0</span>
+    <span class="tl-sep"></span>
+    <button class="btn btn--ghost" id="tlAddKey">◆ 关键帧</button>
+    <button class="btn btn--ghost" id="tlClearActions">清空动作</button>
+    <span class="tl-sep"></span>
+    <label class="check check--inline"><input type="checkbox" id="loopToggle"><span>循环</span></label>
+    <div class="timeline__spacer"></div>
+    <div class="zoom" id="zoomBar">
+      <button class="btn btn--ghost btn--icon" id="zoomOut" title="缩小时间轴（Ctrl+滚轮也行）">−</button>
+      <button class="btn btn--ghost zoom__label" id="zoomFit" title="回到全览">100%</button>
+      <button class="btn btn--ghost btn--icon" id="zoomIn" title="放大时间轴（Ctrl+滚轮也行）">＋</button>
+    </div>
+    <span class="tl-count" id="tlCount">0 个动作 · 0 个关键帧</span>
+  </div>
+
+  <div class="ruler" id="ruler">
+    <div class="tracks">
+      <div class="track" data-track="camera">
+        <div class="track__label"><span class="ico ico--cam"></span>镜头</div>
+        <div class="track__lane" id="laneCamera"></div>
+      </div>
+      <div class="track" data-track="actions">
+        <div class="track__label"><span class="ico ico--act"></span>页面动作</div>
+        <div class="track__lane" id="laneActions"></div>
+      </div>
+      <div class="playhead" id="playhead"><i></i></div>
+    </div>
+  </div>
+</footer>
+
+<div class="exportmask" id="exportMask">
+  <div class="exportcard" id="exportCard">
+    <div class="exportcard__head">
+      <h3 id="exportTitle">正在导出视频</h3>
+      <span class="exportpct" id="exportPct" hidden>0%</span>
+    </div>
+    <p id="exportMsg">请在浏览器弹窗中选择「此标签页」，然后开始共享。</p>
+    <div class="exportbar"><i id="exportProgress"></i></div>
+
+    <div class="exportgrid" id="exportGrid" hidden>
+      <div class="exportthumb"><canvas id="exportPreview" width="150" height="267"></canvas></div>
+      <dl class="exportstats">
+        <div><dt>当前帧</dt><dd id="exportFrames">0 / 0</dd></div>
+        <div><dt>导出速度</dt><dd id="exportFps">—</dd></div>
+        <div><dt>已用 / 剩余</dt><dd id="exportEta">—</dd></div>
+        <div><dt>输出</dt><dd id="exportFormat">—</dd></div>
+      </dl>
+    </div>
+
+    <div class="exportcard__foot">
+      <p class="hint" id="exportHint">导出为 WebM（VP9），可直接上传抖音 / 小红书 / B 站。</p>
+      <button class="btn btn--ghost" id="exportCancel" hidden>取消导出</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="appToast"></div>
+
+<script src="/js/stage.js"></script>
+<script src="/js/timeline.js"></script>
+<script src="/js/exporter.js"></script>
+<script src="/js/webm-muxer.js"></script>
+<script src="/js/render.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>

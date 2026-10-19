@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Kopi · 咖啡点单</title>
+<script src="/js/agent.js"></script>
+<style>
+  :root{
+    --cream:#FBF6EF; --ink:#2C1F19; --ink-2:#6B5A51; --ink-3:#9C8B80;
+    --brand:#C4703A; --brand-2:#E8A15E; --card:#FFFFFF; --line:#EFE5DA;
+    --ok:#3E8B63; --radius:18px;
+    --shadow:0 8px 24px rgba(70,40,20,.09), 0 1px 2px rgba(70,40,20,.06);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--cream); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro SC","PingFang SC","Segoe UI",system-ui,sans-serif;
+    font-size:15px; line-height:1.45; overflow:hidden;
+    display:flex; flex-direction:column;
+  }
+  /* 状态栏占位：样机会在外部叠加 iOS 状态栏 */
+  .statusbar-pad{height:44px; flex:none}
+
+  header{padding:0 20px 6px; flex:none}
+  .row{display:flex; align-items:center; gap:8px}
+  .loc{display:inline-flex; align-items:center; gap:5px; background:#F2E7DA; color:#7A5B44;
+    padding:5px 11px; border-radius:999px; font-size:12px; font-weight:600}
+  .bell{margin-left:auto; width:34px;height:34px;border-radius:50%;border:0;
+    background:#fff; box-shadow:var(--shadow); font-size:15px; cursor:pointer}
+  h1{font-size:23px; margin:10px 0 2px; letter-spacing:-.4px}
+  h1 small{display:block; font-size:12.5px; font-weight:500; color:var(--ink-3); letter-spacing:0; margin-top:3px}
+
+  .search{display:flex; align-items:center; gap:9px; background:#fff; border:1px solid var(--line);
+    border-radius:14px; padding:11px 13px; margin:14px 0 12px; box-shadow:0 1px 1px rgba(70,40,20,.03)}
+  .search span{opacity:.5; font-size:14px}
+  .search input{border:0; outline:0; background:transparent; font:inherit; flex:1; color:var(--ink);
+    font-size:14.5px; min-width:0}
+  .search input::placeholder{color:#B6A69B}
+
+  .chips{display:flex; gap:8px; overflow-x:auto; padding:2px 0 12px; scrollbar-width:none}
+  .chips::-webkit-scrollbar{display:none}
+  .chip{flex:none; border:1px solid var(--line); background:#fff; color:var(--ink-2);
+    padding:8px 15px; border-radius:999px; font:inherit; font-size:13px; font-weight:600; cursor:pointer;
+    transition:all .18s}
+  .chip[aria-selected="true"]{background:var(--ink); color:#fff; border-color:var(--ink)}
+
+  main{flex:1; overflow-y:auto; overflow-x:hidden; padding:0 20px 120px; -webkit-overflow-scrolling:touch}
+  main::-webkit-scrollbar{width:0}
+
+  .hero{position:relative; border-radius:22px; overflow:hidden; padding:20px 18px 18px;
+    background:linear-gradient(135deg,#3B2A20 0%,#5C3B27 55%,#8A5330 100%);
+    color:#fff; box-shadow:0 14px 30px rgba(60,34,18,.24); margin-bottom:20px}
+  .hero:after{content:""; position:absolute; right:-40px; top:-40px; width:170px;height:170px;
+    border-radius:50%; background:radial-gradient(circle,rgba(255,255,255,.22),transparent 65%)}
+  .hero .tag{font-size:11px; letter-spacing:1.6px; text-transform:uppercase; opacity:.72; font-weight:700}
+  .hero h2{margin:8px 0 4px; font-size:20px; letter-spacing:-.3px}
+  .hero p{margin:0; font-size:12.5px; opacity:.78}
+  .hero button{margin-top:14px; border:0; background:#fff; color:#3B2A20; font:inherit; font-weight:700;
+    font-size:13px; padding:9px 17px; border-radius:999px; cursor:pointer}
+
+  h3.sect{font-size:14px; margin:0 0 11px; display:flex; align-items:center; gap:7px; color:var(--ink)}
+  h3.sect a{margin-left:auto; font-size:12px; color:var(--brand); text-decoration:none; font-weight:600}
+
+  .list{display:flex; flex-direction:column; gap:11px}
+  .item{display:flex; align-items:center; gap:13px; background:var(--card); border-radius:var(--radius);
+    padding:11px; box-shadow:var(--shadow); border:1px solid #fff; cursor:pointer; transition:transform .12s}
+  .item:active{transform:scale(.985)}
+  .thumb{width:58px;height:58px;border-radius:14px; display:grid; place-items:center; font-size:26px; flex:none;
+    background:linear-gradient(150deg,#F7E9DA,#EED8C2)}
+  .meta{min-width:0; flex:1}
+  .meta b{display:block; font-size:14.5px; font-weight:650; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .meta i{font-style:normal; color:var(--ink-3); font-size:12px; display:block; margin-top:2px}
+  .price{font-size:13.5px; font-weight:700; color:var(--brand); margin-top:5px; display:block}
+  .add{width:34px;height:34px;flex:none;border-radius:50%; border:0; background:var(--ink); color:#fff;
+    font-size:19px; line-height:1; cursor:pointer; display:grid; place-items:center; padding-bottom:2px}
+  .add:active{background:var(--brand)}
+
+  .empty{color:var(--ink-3); font-size:13px; text-align:center; padding:28px 0}
+
+  /* 底部栏 */
+  .tabbar{position:fixed; left:0; right:0; bottom:0; height:76px; display:flex; padding:9px 12px 14px;
+    background:rgba(255,255,255,.92); backdrop-filter:blur(18px); border-top:1px solid var(--line); z-index:20}
+  .tab{flex:1; border:0; background:none; display:flex; flex-direction:column; align-items:center; gap:3px;
+    font:inherit; font-size:10.5px; color:#A99A90; cursor:pointer; padding:6px 0; border-radius:12px}
+  .tab em{font-size:19px; font-style:normal; filter:grayscale(1); opacity:.6; transition:all .18s}
+  .tab[aria-selected="true"]{color:var(--ink); font-weight:700}
+  .tab[aria-selected="true"] em{filter:none; opacity:1; transform:translateY(-1px)}
+
+  /* 购物车条 */
+  .cartbar{position:fixed; left:14px; right:14px; bottom:88px; height:58px; border-radius:18px; border:0;
+    background:linear-gradient(135deg,#2C1F19,#4A3426); color:#fff; display:flex; align-items:center;
+    padding:0 8px 0 18px; gap:12px; box-shadow:0 12px 28px rgba(40,24,14,.32); cursor:pointer; z-index:21;
+    transform:translateY(140%); transition:transform .32s cubic-bezier(.2,.9,.25,1); font:inherit}
+  .cartbar.show{transform:translateY(0)}
+  .cartbar .cnt{background:rgba(255,255,255,.16); padding:4px 9px; border-radius:9px; font-size:12px; font-weight:700}
+  .cartbar .sum{margin-left:auto; font-size:14px; font-weight:700}
+  .cartbar .go{background:#fff; color:#2C1F19; border-radius:13px; padding:9px 15px; font-size:13px; font-weight:700; margin-left:6px}
+
+  /* 详情抽屉 */
+  .scrim{position:fixed; inset:0; background:rgba(30,18,10,.42); opacity:0; pointer-events:none;
+    transition:opacity .28s; z-index:30; backdrop-filter:blur(2px)}
+  .scrim.show{opacity:1; pointer-events:auto}
+  .sheet{position:fixed; left:0; right:0; bottom:0; background:#fff; border-radius:26px 26px 0 0;
+    padding:10px 20px 26px; z-index:31; transform:translateY(110%); transition:transform .34s cubic-bezier(.2,.9,.25,1);
+    box-shadow:0 -12px 40px rgba(40,24,14,.18); max-height:78%; overflow:auto}
+  .sheet.show{transform:translateY(0)}
+  .grab{width:40px;height:4px;border-radius:2px;background:#E6DCD2;margin:0 auto 16px}
+  .sheet .big{width:100%; height:120px; border-radius:18px; display:grid; place-items:center; font-size:52px;
+    background:linear-gradient(150deg,#F7E9DA,#EBD3BC); margin-bottom:16px}
+  .sheet h2{margin:0 0 4px; font-size:19px}
+  .sheet .sub{color:var(--ink-3); font-size:12.5px; margin:0 0 14px}
+  .sheet .desc{color:var(--ink-2); font-size:13px; margin:0 0 18px; line-height:1.6}
+  .qty{display:flex; align-items:center; gap:16px; margin-bottom:18px}
+  .qty button{width:36px;height:36px;border-radius:12px;border:1px solid var(--line); background:#fff;
+    font-size:19px; cursor:pointer; color:var(--ink)}
+  .qty b{min-width:22px; text-align:center; font-size:16px}
+  .sheet .cta{width:100%; border:0; border-radius:16px; padding:15px; background:var(--ink); color:#fff;
+    font:inherit; font-weight:700; font-size:15px; cursor:pointer}
+  .sheet .cta:active{background:var(--brand)}
+
+  /* 成功页 */
+  .done{position:fixed; inset:0; background:var(--cream); z-index:40; display:none;
+    flex-direction:column; align-items:center; justify-content:center; gap:6px; text-align:center; padding:0 32px}
+  .done.show{display:flex}
+  .done .ok{width:82px;height:82px;border-radius:50%; background:#E7F3EC; color:var(--ok);
+    display:grid; place-items:center; font-size:38px; margin-bottom:16px}
+  .done h2{margin:0; font-size:21px}
+  .done p{margin:0; color:var(--ink-3); font-size:13px; line-height:1.7}
+  .done button{margin-top:22px; border:1px solid var(--line); background:#fff; border-radius:14px;
+    padding:12px 26px; font:inherit; font-weight:650; cursor:pointer}
+
+  .toast{position:fixed; left:50%; bottom:170px; transform:translate(-50%,12px); background:rgba(44,31,25,.94);
+    color:#fff; font-size:12.5px; padding:9px 16px; border-radius:999px; opacity:0; transition:all .26s; z-index:50;
+    pointer-events:none; white-space:nowrap}
+  .toast.show{opacity:1; transform:translate(-50%,0)}
+
+  /* 其他 tab 内容 */
+  .panel{display:none}
+  .panel.active{display:block}
+  .rowcard{display:flex; align-items:center; gap:13px; background:#fff; border-radius:var(--radius);
+    padding:15px; box-shadow:var(--shadow); margin-bottom:11px}
+  .rowcard .k{font-size:13.5px; font-weight:600}
+  .rowcard .s{font-size:11.5px; color:var(--ink-3); margin-top:2px}
+  .rowcard .v{margin-left:auto; font-size:13px; font-weight:700; color:var(--brand)}
+  .points{background:linear-gradient(135deg,#C4703A,#E8A15E); color:#fff; border-radius:22px;
+    padding:22px; box-shadow:0 14px 30px rgba(196,112,58,.28); margin-bottom:18px}
+  .points .n{font-size:34px; font-weight:800; letter-spacing:-1px; margin:6px 0 2px}
+  .bar{height:7px; border-radius:4px; background:rgba(255,255,255,.28); margin-top:16px; overflow:hidden}
+  .bar i{display:block; height:100%; width:68%; background:#fff; border-radius:4px}
+</style>
+</head>
+<body>
+
+<div class="statusbar-pad"></div>
+
+<header>
+  <div class="row">
+    <span class="loc">📍 静安 · 南京西路 1788</span>
+    <button class="bell" data-testid="bell" aria-label="消息">🔔</button>
+  </div>
+  <h1>早安，Kai<small>今天想喝点什么？</small></h1>
+  <label class="search">
+    <span>🔍</span>
+    <input id="search" data-testid="search" type="search" placeholder="搜索咖啡、茶饮、甜点" autocomplete="off">
+  </label>
+  <div class="chips" data-testid="chips">
+    <button class="chip" data-cat="all" aria-selected="true">全部</button>
+    <button class="chip" data-cat="coffee" aria-selected="false">咖啡</button>
+    <button class="chip" data-cat="tea" aria-selected="false">茶饮</button>
+    <button class="chip" data-cat="bakery" aria-selected="false">烘焙</button>
+  </div>
+</header>
+
+<main id="main">
+  <section class="panel active" id="panel-home">
+    <div class="hero">
+      <div class="tag">TODAY'S PICK</div>
+      <h2>桂花冷萃 · 秋季限定</h2>
+      <p>冷萃 16 小时 + 桂花蜜，第二杯半价</p>
+      <button data-testid="hero-cta">立即尝鲜</button>
+    </div>
+
+    <h3 class="sect">为你推荐 <a href="#" data-testid="see-all">查看全部</a></h3>
+    <div class="list" id="list"></div>
+  </section>
+
+  <section class="panel" id="panel-orders">
+    <h3 class="sect">进行中</h3>
+    <div class="rowcard" data-testid="order-1">
+      <div class="thumb">🥤</div>
+      <div><div class="k">燕麦拿铁 × 1</div><div class="s">预计 8 分钟后可取 · 门店 03</div></div>
+      <div class="v">制作中</div>
+    </div>
+    <h3 class="sect" style="margin-top:22px">历史订单</h3>
+    <div class="rowcard"><div class="thumb">☕️</div><div><div class="k">美式 × 2</div><div class="s">10 月 12 日 · ¥46</div></div><div class="v">再来一单</div></div>
+    <div class="rowcard"><div class="thumb">🥐</div><div><div class="k">可颂 + 拿铁</div><div class="s">10 月 09 日 · ¥52</div></div><div class="v">再来一单</div></div>
+  </section>
+
+  <section class="panel" id="panel-rewards">
+    <div class="points">
+      <div style="font-size:12px;opacity:.8;letter-spacing:1px">KOPI 积分</div>
+      <div class="n">1,280</div>
+      <div style="font-size:12px;opacity:.85">再 320 分升级金卡会员</div>
+      <div class="bar"><i></i></div>
+    </div>
+    <h3 class="sect">本月礼遇</h3>
+    <div class="rowcard"><div class="thumb">🎁</div><div><div class="k">免费升杯券</div><div class="s">有效期至 10 月 31 日</div></div><div class="v">使用</div></div>
+    <div class="rowcard"><div class="thumb">🎟️</div><div><div class="k">满 50 减 12</div><div class="s">本周五到期</div></div><div class="v">使用</div></div>
+  </section>
+
+  <section class="panel" id="panel-me">
+    <div class="rowcard"><div class="thumb">👤</div><div><div class="k">Kai</div><div class="s">金卡会员 · 加入 428 天</div></div><div class="v">编辑</div></div>
+    <div class="rowcard"><div class="thumb">📍</div><div><div class="k">默认门店</div><div class="s">南京西路 1788 · 步行 3 分钟</div></div><div class="v">切换</div></div>
+    <div class="rowcard"><div class="thumb">💳</div><div><div class="k">支付方式</div><div class="s">已绑定 2 张卡</div></div><div class="v">管理</div></div>
+    <div class="rowcard"><div class="thumb">⚙️</div><div><div class="k">设置</div></div><div class="v">›</div></div>
+  </section>
+</main>
+
+<button class="cartbar" id="cartbar" data-testid="cartbar">
+  <span class="cnt" id="cart-count">0 件</span>
+  <span class="sum" id="cart-sum">¥0</span>
+  <span class="go">去结算</span>
+</button>
+
+<nav class="tabbar" data-testid="tabbar">
+  <button class="tab" data-tab="home" aria-selected="true"><em>☕️</em>首页</button>
+  <button class="tab" data-tab="orders" aria-selected="false"><em>🧾</em>订单</button>
+  <button class="tab" data-tab="rewards" aria-selected="false"><em>🎁</em>会员</button>
+  <button class="tab" data-tab="me" aria-selected="false"><em>👤</em>我的</button>
+</nav>
+
+<div class="scrim" id="scrim"></div>
+<div class="sheet" id="sheet">
+  <div class="grab"></div>
+  <div class="big" id="sheet-emoji">☕️</div>
+  <h2 id="sheet-name">桂花冷萃</h2>
+  <p class="sub" id="sheet-sub">中杯 / 冰 / 少糖</p>
+  <p class="desc" id="sheet-desc">16 小时慢萃，融合当季桂花蜜，入口清亮回甘。</p>
+  <div class="qty">
+    <button id="qty-minus" data-testid="qty-minus">−</button>
+    <b id="qty" data-testid="qty">1</b>
+    <button id="qty-plus" data-testid="qty-plus">+</button>
+  </div>
+  <button class="cta" id="sheet-add" data-testid="sheet-add">加入购物车 · ¥32</button>
+</div>
+
+<div class="done" id="done">
+  <div class="ok">✓</div>
+  <h2>下单成功</h2>
+  <p>取餐号 <b>A 032</b><br>预计 8 分钟后可取</p>
+  <button id="done-back" data-testid="done-back">回到首页</button>
+</div>
+
+<div class="toast" id="toast">已加入购物车</div>
+
+<script>
+const MENU = [
+  { id:'m1', name:'桂花冷萃',     cat:'coffee', price:32, emoji:'🧊', note:'秋季限定 · 少糖', desc:'16 小时慢萃，融合当季桂花蜜，入口清亮回甘。' },
+  { id:'m2', name:'燕麦拿铁',     cat:'coffee', price:29, emoji:'☕️', note:'燕麦奶 · 热',      desc:'以燕麦奶替代牛奶，坚果香与咖啡脂香更贴合。' },
+  { id:'m3', name:'手冲耶加雪菲', cat:'coffee', price:38, emoji:'🫖', note:'浅烘 · 柑橘调',    desc:'埃塞俄比亚水洗豆，柑橘与茉莉的明亮酸质。' },
+  { id:'m4', name:'茉莉毛峰',     cat:'tea',    price:26, emoji:'🍵', note:'冷泡 · 无糖',      desc:'三窨茉莉与毛峰冷泡 8 小时，清甜不涩。' },
+  { id:'m5', name:'黄油可颂',     cat:'bakery', price:22, emoji:'🥐', note:'每日现烤',         desc:'48 层黄油折叠，外层酥脆，内里拉丝。' },
+  { id:'m6', name:'提拉米苏',     cat:'bakery', price:28, emoji:'🍰', note:'冷藏 · 含酒',      desc:'马斯卡彭与浓缩咖啡，撒可可粉，口感绵密。' },
+];
+
+const state = { cat:'all', q:'', cart:0, sum:0, current:null, qty:1 };
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+const money = (n) => '¥' + n;
+
+function renderList(){
+  const list = $('#list');
+  const items = MENU.filter(m => (state.cat === 'all' || m.cat === state.cat) &&
+    (!state.q || m.name.includes(state.q) || m.note.includes(state.q)));
+  if (!items.length) { list.innerHTML = '<div class="empty">没有找到相关商品</div>'; return; }
+  list.innerHTML = items.map(m => `
+    <article class="item" data-id="${m.id}" data-testid="item-${m.id}">
+      <div class="thumb">${m.emoji}</div>
+      <div class="meta">
+        <b>${m.name}</b>
+        <i>${m.note}</i>
+        <span class="price">${money(m.price)}</span>
+      </div>
+      <button class="add" data-add="${m.id}" data-testid="add-${m.id}" aria-label="加入 ${m.name}">+</button>
+    </article>`).join('');
+}
+
+function toast(msg){
+  const t = $('#toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.classList.remove('show'), 1600);
+}
+
+function addToCart(qty = 1){
+  state.cart += qty;
+  state.sum += (state.current ? state.current.price : 0) * qty;
+  $('#cart-count').textContent = state.cart + ' 件';
+  $('#cart-sum').textContent = money(state.sum);
+  $('#cartbar').classList.add('show');
+}
+
+function openSheet(id){
+  const m = MENU.find(x => x.id === id);
+  if (!m) return;
+  state.current = m; state.qty = 1;
+  $('#sheet-emoji').textContent = m.emoji;
+  $('#sheet-name').textContent = m.name;
+  $('#sheet-sub').textContent = m.note;
+  $('#sheet-desc').textContent = m.desc;
+  $('#qty').textContent = '1';
+  $('#sheet-add').textContent = `加入购物车 · ${money(m.price)}`;
+  $('#scrim').classList.add('show');
+  $('#sheet').classList.add('show');
+}
+function closeSheet(){
+  $('#scrim').classList.remove('show');
+  $('#sheet').classList.remove('show');
+}
+
+document.addEventListener('click', (e) => {
+  const addBtn = e.target.closest('[data-add]');
+  if (addBtn) {
+    e.stopPropagation();
+    state.current = MENU.find(m => m.id === addBtn.dataset.add);
+    addToCart(1);
+    toast('已加入购物车 · ' + state.current.name);
+    return;
+  }
+  const item = e.target.closest('.item');
+  if (item) { openSheet(item.dataset.id); return; }
+
+  const chip = e.target.closest('.chip');
+  if (chip) {
+    state.cat = chip.dataset.cat;
+    $$('.chip').forEach(c => c.setAttribute('aria-selected', String(c === chip)));
+    renderList();
+    return;
+  }
+
+  const tab = e.target.closest('.tab');
+  if (tab) {
+    $$('.tab').forEach(t => t.setAttribute('aria-selected', String(t === tab)));
+    $$('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + tab.dataset.tab));
+    $('#main').scrollTop = 0;
+    return;
+  }
+
+  if (e.target.closest('#qty-plus')) {
+    state.qty = Math.min(9, state.qty + 1);
+    $('#qty').textContent = state.qty;
+    $('#sheet-add').textContent = `加入购物车 · ${money(state.current.price * state.qty)}`;
+    return;
+  }
+  if (e.target.closest('#qty-minus')) {
+    state.qty = Math.max(1, state.qty - 1);
+    $('#qty').textContent = state.qty;
+    $('#sheet-add').textContent = `加入购物车 · ${money(state.current.price * state.qty)}`;
+    return;
+  }
+  if (e.target.closest('#sheet-add')) {
+    addToCart(state.qty);
+    toast(`已加入 ${state.qty} 件 · ${state.current.name}`);
+    closeSheet();
+    return;
+  }
+  if (e.target.closest('#scrim')) { closeSheet(); return; }
+  if (e.target.closest('#cartbar')) {
+    $('#done').classList.add('show');
+    return;
+  }
+  if (e.target.closest('#done-back')) {
+    $('#done').classList.remove('show');
+    $('#cartbar').classList.remove('show');
+    state.cart = 0; state.sum = 0;
+    $('#cart-count').textContent = '0 件'; $('#cart-sum').textContent = '¥0';
+    return;
+  }
+  if (e.target.closest('#hero-cta')) { openSheet('m1'); return; }
+  if (e.target.closest('[data-testid="see-all"]')) { e.preventDefault(); toast('共 6 款在售'); return; }
+});
+
+$('#search').addEventListener('input', (e) => {
+  state.q = e.target.value.trim();
+  renderList();
+});
+
+renderList();
+</script>
+</body>
+</html>

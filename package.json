@@ -1,0 +1,22 @@
+{
+  "name": "live-mockup",
+  "version": "1.3.0",
+  "private": true,
+  "type": "module",
+  "description": "在 3D 样机里跑真网页或播放录屏视频：录真实操作成关键帧，回放时网页自己动起来，导出成视频",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node tools/e2e.mjs",
+    "test:input": "node tools/input-test.mjs",
+    "test:keyframe": "node tools/keyframe-test.mjs",
+    "test:video": "node tools/video-test.mjs",
+    "test:render": "node tools/render-test.mjs",
+    "test:export": "node tools/export-test.mjs",
+    "test:proxy": "node tools/proxy-test.mjs",
+    "test:devserver": "node tools/devserver-test.mjs",
+    "test:parity": "node tools/parity-test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
