@@ -1,0 +1,19 @@
+﻿{
+  "name": "livemockup-client",
+  "productName": "LiveMockup",
+  "version": "0.1.0",
+  "private": true,
+  "description": "LiveMockup 桌面客户端（Windows 先行，Android 后续）",
+  
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "smoke": "electron . --smoke",
+    "smoke:encode": "electron . --smoke --encode",
+    "dist": "electron-builder --win --x64"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11"
+  }
+}
+

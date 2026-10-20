@@ -1612,6 +1612,11 @@
     dom.exportFormat.textContent = `${w}×${h}`;
   }
 
+  /** stampName 的安全版：原生编码选项在导出流程早期就要用到文件名 */
+  function stampNameSafe() {
+    try { return stampName(); } catch (_) { return 'livemockup'; }
+  }
+
   function stampName() {
     const d = new Date();
     const p = (n) => String(n).padStart(2, '0');
@@ -1619,6 +1624,12 @@
   }
 
   /* ── 录屏模式：canvas 内部逐帧渲染，不碰屏幕捕获、不跟墙钟 ── */
+  /** 客户端里优先用原生 ffmpeg 编码（H.264/MP4，不受浏览器容器与码率限制） */
+  function nativeEncodeOpts() {
+    if (!(window.LM && window.LM.isClient && window.LM.job)) return false;
+    return { crf: 16, preset: 'veryfast', defaultName: stampNameSafe() + '.mp4' };
+  }
+
   async function exportVideoInternal() {
     if (Render.active) return toast('已经在渲染了，先等它跑完或点「取消导出」', 3200);
     if (!dom.videoEl.videoWidth) return toast('视频还没就绪：先把这段录屏选上再导出', 4200);
@@ -1653,7 +1664,7 @@
 
     const startedAt = performance.now();
     try {
-      const blob = await Render.render({
+      const result = await Render.render({
         video: dom.videoEl,
         aspect,
         camera: project.camera,
@@ -1662,6 +1673,7 @@
         model: spec.device,
         autoSize: spec.autoSize,
         glare: project.ui.glare !== false,
+        native: nativeEncodeOpts(),
         duration,
         fps: targetFps,
         onProgress: paintExportProgress,
@@ -1671,8 +1683,15 @@
       });
 
       const secs = (performance.now() - startedAt) / 1000;
-      Exporter.download(blob, stampName() + '.webm');
-      toast(`导出完成 · ${outW}×${outH} · ${total} 帧 · ${(blob.size / 1048576).toFixed(1)} MB · 用时 ${secs.toFixed(1)}s`, 5200);
+      if (result && result.native) {
+        // 原生编码：文件已经落盘，不再走「下载」
+        const mb = (result.size / 1048576).toFixed(1);
+        toast(`导出完成 · ${outW}×${outH} · ${result.frames} 帧 · ${mb} MB · H.264 (CRF ${result.crf}) · 用时 ${secs.toFixed(1)}s`, 6400);
+        try { await window.LM.reveal(result.path); } catch (_) {}
+      } else {
+        Exporter.download(result, stampName() + '.webm');
+        toast(`导出完成 · ${outW}×${outH} · ${total} 帧 · ${(result.size / 1048576).toFixed(1)} MB · 用时 ${secs.toFixed(1)}s`, 5200);
+      }
     } catch (err) {
       if (err && err.aborted) toast('已取消导出，没有生成文件', 3000);
       else toast('渲染失败：' + (err?.message || err), 5200);

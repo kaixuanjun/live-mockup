@@ -1060,6 +1060,69 @@ void main() {
   }
 
   /** 兜底：WebCodecs 不可用（非安全上下文等）时退回实时录制，行为和旧版一致 */
+  /**
+   * 客户端原生编码：每帧原始像素直接写进 ffmpeg 的 stdin，出 H.264 / MP4。
+   *
+   * 为什么要它：浏览器里只有 WebCodecs（VP9/WebM，码率有上限、容器受限），
+   * 而客户端里编码器是我们自己的进程 —— 想要 CRF 质量、想要 MP4、想要
+   * 任意码率都可以。帧走的是「2D 画布取像素 → IPC → ffmpeg」，不经过 WebCodecs。
+   */
+  function nativeSink(cfg, opts) {
+    const api = window.LM;
+    const cv = document.createElement('canvas');
+    cv.width = cfg.width;
+    cv.height = cfg.height;
+    const ctx = cv.getContext('2d', { alpha: false, willReadFrequently: true });
+    const crf = opts.crf == null ? 16 : opts.crf;
+    let begun = null;
+    let path = '';
+    let frames = 0;
+
+    const begin = async () => {
+      const r = await api.job.begin({
+        width: cfg.width,
+        height: cfg.height,
+        fps: cfg.framerate,
+        crf,
+        preset: opts.preset || 'veryfast',
+        defaultName: opts.defaultName || 'livemockup.mp4',
+      });
+      if (!r || r.ok === false) throw new Error((r && r.error) || '原生编码启动失败');
+      if (r.canceled) { const e = new Error('已取消'); e.aborted = true; throw e; }
+      path = r.path;
+      return r;
+    };
+
+    return {
+      kind: 'native',
+      label: 'FFmpeg · H.264',
+      get backpressure() { return 0; },
+      async encode(src) {
+        if (!begun) begun = begin();
+        await begun;
+        // 先落到 2D 画布：WebGL 画布上不能直接 getImageData
+        ctx.drawImage(src, 0, 0);
+        const img = ctx.getImageData(0, 0, cfg.width, cfg.height);
+        const r = await api.job.frame(img.data);
+        if (!r || r.ok === false) throw new Error((r && r.error) || '写帧失败');
+        frames += 1;
+      },
+      async finish() {
+        const r = await api.job.end();
+        if (!r || r.ok === false) throw new Error((r && r.error) || '收尾失败');
+        return {
+          native: true,
+          path: r.path || path,
+          size: r.size || 0,
+          frames: r.frames || frames,
+          codec: 'H.264',
+          crf,
+        };
+      },
+      dispose() { try { api.job.abort(); } catch (_) {} },
+    };
+  }
+
   function recorderSink(canvas, { fps, bitrate }) {
     const stream = canvas.captureStream(fps);
     const mime = pickMime();
@@ -1104,6 +1167,8 @@ void main() {
     phase: 'idle',
     // 空 = 还没渲染过（真正的后端在第一次 createScene 时才定下来）
     backend: '',
+    // 最近一次用到的编码通道：native / webcodecs / recorder
+    lastSink: '',
   };
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1135,6 +1200,8 @@ void main() {
    * @param {(phase:string)=>void} [o.onPhase] 'prepare' | 'render' | 'encode'
    * @param {boolean} [o.glare=false] 是否画玻璃反光（和编辑器 .device__glare 一致）
    * @param {boolean} [o.preferGL=true] 是否优先用 WebGL2 合成（false 强制走 canvas2D 兜底）
+   * @param {boolean|object} [o.native=false] 客户端里走原生 ffmpeg 编码：
+   *        true 或 { crf, preset, defaultName }。返回 { native:true, path, size, frames } 而不是 Blob
    * @param {number} [o.gridHint=0] 强制指定 canvas2D 的网格数（测试做精确参考用）
    * @returns {Promise<Blob>}
    */
@@ -1144,6 +1211,7 @@ void main() {
       video, aspect = '9:16', camera = [], bg = 'aurora', color = 'midnight',
       model = 'auto', autoSize = null, duration = 5, fps: fpsIn = 30,
       onProgress, onPhase, preferGL = true, gridHint = 0, glare = false,
+      native = false,
     } = o;
 
     if (!video) throw new Error('没有可渲染的视频');
@@ -1187,8 +1255,13 @@ void main() {
         width: W, height: H, bitrate, framerate: fps,
         latencyMode: 'quality', hardwareAcceleration: 'prefer-hardware',
       };
-      const codec = await pickCodec(cfg);
-      if (codec) {
+      // 客户端：优先走原生 ffmpeg（H.264/MP4，不受 WebCodecs 限制）
+      const useNative = !!(native && window.LM && window.LM.job && window.LM.isClient);
+      const codec = useNative ? null : await pickCodec(cfg);
+      if (useNative) {
+        sink = nativeSink(cfg, typeof native === 'object' ? native : {});
+        gpu.nativeEncode = true;
+      } else if (codec) {
         const mux = window.WebmMuxer.create({
           width: W, height: H, codec: codec.container, fps, frames: total,
         });
@@ -1197,6 +1270,7 @@ void main() {
         sink = recorderSink(scene.out, { fps, bitrate });
       }
       state.sink = sink;
+      state.lastSink = sink.kind;
     } catch (err) {
       // 准备阶段就失败（画布建不出来 / 编码器配置不被接受）也要把锁放掉
       state.active = false;
@@ -1290,7 +1364,7 @@ void main() {
           const tp = performance.now();
           scene.paint(i / fps, video);
           const te = performance.now();
-          sink.encode(scene.out, i);
+          await sink.encode(scene.out, i);
           const tc = performance.now();
           done = i + 1;
           stats.seek += tp - ts;
@@ -1315,11 +1389,16 @@ void main() {
       if (state.aborted) throw abortError();
       state.phase = 'encode';
       if (onPhase) { try { onPhase('encode'); } catch (_) {} }
-      const blob = await sink.finish();
+      const result = await sink.finish();
       done = total;
       report(true);
-      if (!blob || !blob.size) throw new Error('渲染没有产出画面');
-      return blob;
+      if (!result) throw new Error('渲染没有产出画面');
+      if (result.native) {
+        if (!result.size) throw new Error('原生编码没有产出文件');
+        return result;
+      }
+      if (!result.size) throw new Error('渲染没有产出画面');
+      return result;
     } catch (err) {
       try { sink.dispose(); } catch (_) {}
       throw err;
@@ -1347,6 +1426,8 @@ void main() {
     get phase() { return state.phase; },
     /** 合成后端：'webgl2'（精确透视） 或 'canvas2d'（逐格仿射兜底） */
     get backend() { return state.backend; },
+    /** 最近一次导出用的编码通道：'native'（客户端 ffmpeg）/ 'webcodecs' / 'recorder' */
+    get lastSink() { return state.lastSink; },
     /**
      * 实际用的 GPU 适配器。`discrete` 为 true 表示落在独显上；
      * 为 null 表示读不到名字（部分浏览器屏蔽了 WEBGL_debug_renderer_info），

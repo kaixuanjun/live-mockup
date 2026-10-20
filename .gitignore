@@ -2,3 +2,9 @@
 *.log
 node_modules/
 
+client/node_modules/
+client/.smoke/
+client/dist/
+client/.smoke-out.txt
+client/.smoke-err.txt
+client/.min-*

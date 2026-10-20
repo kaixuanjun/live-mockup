@@ -167,7 +167,22 @@
     });
   }
 
-  function download(blob, name) {
+  /**
+   * 客户端里不再往「下载」目录扔文件：走原生保存对话框（用户自己选位置）。
+   * 浏览器里保持原来的 a[download] 行为；原生保存失败也退回下载，别让人拿不到文件。
+   */
+  async function download(blob, name) {
+    if (window.LM && window.LM.isClient && window.LM.save) {
+      try {
+        const buf = await blob.arrayBuffer();
+        const ext = String(name).split('.').pop();
+        const r = await window.LM.save(buf, name, [{ name: ext.toUpperCase(), extensions: [ext] }]);
+        if (r && !r.canceled && window.LM.reveal) window.LM.reveal(r.path);
+        return r;
+      } catch (err) {
+        console.warn('[exporter] 原生保存失败，改用下载：', err && err.message);
+      }
+    }
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
