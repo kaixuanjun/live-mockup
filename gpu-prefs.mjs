@@ -19,6 +19,40 @@ import path from 'node:path';
 
 const exec = promisify(execFile);
 
+/**
+ * 写注册表走 PowerShell（.NET 的 Registry API），不走 reg.exe。
+ * 踩过的坑：从 Electron 主进程 / 它拉起的子进程里调用 `reg.exe add` 会被拒
+ * （0x5 拒绝访问），同一个调用用 `Set-ItemProperty` 就正常；
+ * 而 `reg query` 读取一直是好的 —— 所以读用 reg，写用 PowerShell。
+ */
+const PS = (() => {
+  if (process.platform !== 'win32') return 'powershell.exe';
+  const root = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
+  return path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+})();
+
+/** PowerShell 单引号字符串：内部的 ' 要写成 '' */
+function psq(v) {
+  return "'" + String(v).replace(/'/g, "''") + "'";
+}
+
+async function psRun(script) {
+  return exec(PS, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+    windowsHide: true,
+  });
+}
+
+/**
+ * 用绝对路径的 reg.exe。
+ * 为什么：GUI 客户端（双击启动的 Electron 等）拿到的 PATH 往往很精简，
+ * 只写 'reg' 可能解析失败或落到别的同名程序上；直接指到 System32 最稳。
+ */
+const REG = (() => {
+  if (process.platform !== 'win32') return 'reg';
+  const root = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
+  return path.join(root, 'System32', 'reg.exe');
+})();
+
 export const KEY = 'HKCU\\Software\\Microsoft\\DirectX\\UserGpuPreferences';
 export const LEVEL = Object.freeze({ auto: 0, powerSave: 1, highPerf: 2 });
 
@@ -107,7 +141,7 @@ export async function readPrefs() {
   if (!isWindows()) return {};
   let stdout = '';
   try {
-    const r = await exec('reg', ['query', KEY], { windowsHide: true });
+    const r = await exec(REG, ['query', KEY], { windowsHide: true });
     stdout = r.stdout || '';
   } catch (_) {
     return {};
@@ -154,7 +188,10 @@ export async function setLevel(exe, level) {
   const before = prefs[exe] || '';
   const after = withLevel(before, level);
   if (before === after) return { exe, before, after, changed: false };
-  await exec('reg', ['add', KEY, '/v', exe, '/t', 'REG_SZ', '/d', after, '/f'], { windowsHide: true });
+  await psRun(
+    'Set-ItemProperty -Path ' + psq('HKCU:\\Software\\Microsoft\\DirectX\\UserGpuPreferences') +
+    ' -Name ' + psq(exe) + ' -Value ' + psq(after) + ' -Type String -ErrorAction Stop',
+  );
   const check = await readPrefs();
   if ((check[exe] || '') !== after) throw new Error('写入后读回不一致，可能被策略拦截');
   return { exe, before, after, changed: true };
@@ -166,7 +203,10 @@ export async function clearLevel(exe) {
   if (!validTarget(exe)) throw new Error('目标不可写');
   const prefs = await readPrefs();
   if (!(exe in prefs)) return { exe, removed: false };
-  await exec('reg', ['delete', KEY, '/v', exe, '/f'], { windowsHide: true });
+  await psRun(
+    'Remove-ItemProperty -Path ' + psq('HKCU:\\Software\\Microsoft\\DirectX\\UserGpuPreferences') +
+    ' -Name ' + psq(exe) + ' -ErrorAction SilentlyContinue',
+  );
   const check = await readPrefs();
   return { exe, removed: !(exe in check) };
 }

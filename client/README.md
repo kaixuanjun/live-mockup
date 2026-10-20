@@ -44,6 +44,25 @@ public/             # 与浏览器版共用的全部 UI 与业务逻辑
 页面侧靠能力检测：`window.LM && window.LM.isClient` 才走原生路径，
 否则自动退回浏览器行为（`Exporter.download` 用 `a[download]`、导出用 WebCodecs）。
 
+## 显卡面板（客户端里不需要 HTTP 服务器）
+
+浏览器版是「页面 → fetch /api/gpu/* → localhost 服务器 → 注册表」；
+客户端里没有那个服务器，所以改走 IPC：
+
+```
+gpu-panel.js  ──window.LM.gpu.*──▶  主进程  ──spawn(ELECTRON_RUN_AS_NODE)──▶  gpu-prefs.mjs
+                                     │                                        │
+                                     └──── reg query（读） / PowerShell（写） ◀┘
+```
+
+踩过的两个坑，都写进代码注释了：
+
+1. **`reg.exe add` 在 Electron 引起的进程树里会被拒**（0x5 拒绝访问），而 `reg query` 正常、
+   同一个调用从普通 node 进程又没问题 —— 所以写入改用 PowerShell 的 `Set-ItemProperty`（.NET API），
+   并且把写操作放到 `client/node/gpu-write.cjs`（纯 Node 子进程）里执行，减少变量。
+2. **某些受限环境（容器 / 沙箱）连 PowerShell 都不给子进程写注册表**。这时冒烟测试会
+   明确标注「本环境受限，跳过写入校验」，不会伪装成通过 —— 链路本身（IPC → 子进程 → 模块）照样验证。
+
 ## 原生导出怎么走
 
 ```

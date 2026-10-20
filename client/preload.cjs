@@ -44,6 +44,13 @@ contextBridge.exposeInMainWorld('LM', {
     abort: () => ipcRenderer.invoke('lm:job:abort'),
   },
 
+  /** 显卡偏好（客户端直接写系统设置，不需要 HTTP 服务器） */
+  gpu: {
+    status: () => ipcRenderer.invoke('lm:gpu:status'),
+    apply: (exe, level) => ipcRenderer.invoke('lm:gpu:apply', { exe, level }),
+    restore: (exe) => ipcRenderer.invoke('lm:gpu:restore', { exe }),
+  },
+
   /** 主进程消息（订阅） */
   onMessage: (fn) => {
     const handler = (_e, payload) => { try { fn(payload); } catch (_) {} };

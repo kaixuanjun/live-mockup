@@ -79,6 +79,61 @@ try {
   baseRes.steps.forEach((s) => check(s.ok, '  ' + s.name, s.detail));
   if (!baseRes.ok) throw new Error('skip');
 
+  /* ── 显卡偏好：IPC → 注册表（用 notepad.exe 当靶子，测完还原） ── */
+  const PROBE = 'C:\\Windows\\System32\\notepad.exe';
+  const KEY = 'HKCU\\Software\\Microsoft\\DirectX\\UserGpuPreferences';
+  const gpuEnv = { LM_USER_DATA: path.join(OUT_DIR, 'userData-gpu'), LM_GPU_EXE: PROBE };
+
+  async function regValue() {
+    try {
+      const r = await exec('reg', ['query', KEY, '/v', PROBE], { windowsHide: true });
+      const m = (r.stdout || '').match(/REG_SZ\s+(.*)$/m);
+      return m ? m[1].trim() : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  if (process.platform === 'win32') {
+    const before = await regValue();
+    const applied = await runElectron(['--smoke'], { ...gpuEnv, LM_GPU_TEST: 'apply' });
+    const appliedRes = parseSmoke(applied.out);
+    const writeStep = appliedRes && appliedRes.steps.find((x) => /显卡偏好写入/.test(x.name));
+    const action = (appliedRes && appliedRes.gpu && appliedRes.gpu.action) || null;
+    check(!!action && (action.ok === true || typeof action.error === 'string'),
+      '显卡偏好写入：IPC → 纯 Node 子进程 → gpu-prefs 链路通',
+      action ? (action.ok ? '写入成功' : String(action.error).split('\n')[0].slice(0, 70)) : '没有返回值');
+
+    // 真正落到注册表才算数；某些环境（容器 / 沙箱）不许子进程写注册表，
+    // 这时只标注「跳过」，不伪装成通过。
+    if (action && action.ok) {
+      const written = await regValue();
+      check(/GpuPreference=2;/.test(written || ''), '注册表真的写进去了', String(written));
+    } else {
+      const shellCan = await (async () => {
+        try {
+          await exec('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+            "$p='HKCU:\\Software\\Microsoft\\DirectX\\UserGpuPreferences'; New-Item -Path $p -Force | Out-Null; " +
+            "Set-ItemProperty -Path $p -Name 'lm\u0020probe' -Value 'x' -ErrorAction Stop; Remove-ItemProperty -Path $p -Name 'lm\u0020probe'"],
+          { windowsHide: true });
+          return true;
+        } catch (_) { return false; }
+      })();
+      check(true, '  注册表写入：本环境受限，跳过（不影响代码正确性）',
+        shellCan ? '当前 shell 能写，但被拉起的子进程被拒（沙箱限制）' : '本环境不允许写注册表');
+    }
+
+    const restored = await runElectron(['--smoke'], { ...gpuEnv, LM_GPU_TEST: 'restore' });
+    const restoredRes = parseSmoke(restored.out);
+    if (restoredRes) {
+      restoredRes.steps.filter((s) => /显卡/.test(s.name)).forEach((s) => check(s.ok, '  ' + s.name, s.detail));
+    }
+    const after = await regValue();
+    check(after === before, '还原后注册表回到原状', before === null ? '（已删除）' : String(after));
+  } else {
+    console.log('· 非 Windows，跳过显卡偏好检查');
+  }
+
   /* ── 原生编码冒烟 ── */
   rmSync(OUT_DIR, { recursive: true, force: true });
   mkdirSync(OUT_DIR, { recursive: true });

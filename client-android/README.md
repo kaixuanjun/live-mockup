@@ -60,7 +60,7 @@ C:\android-sdk\platform-tools\adb.exe install -r app\build\outputs\apk\debug\app
 
 | 能力 | Windows | Android |
 | --- | --- | --- |
-| 原生 ffmpeg 编码 | ✅ H.264/MP4，CRF 可控 | ⏳ 先走 WebView 的 WebCodecs，下一轮换 `MediaCodec` |
+| 编码 | ✅ 原生 ffmpeg，H.264/MP4，CRF 可控 | ⏳ 先走 WebView 的 WebCodecs；下一轮换 `MediaCodec` 硬编 |
 | 原生保存对话框 | ✅ | 系统文件选择器 / `@capacitor/filesystem` |
 | GPU 选择 | ✅ 可写系统偏好 | 系统决定（无法干预） |
 | 窗口节流 | ✅ 已关闭 | 切后台会暂停（系统限制） |

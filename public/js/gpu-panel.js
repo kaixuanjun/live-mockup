@@ -29,6 +29,43 @@
   let windows = null;
   let status = null;
 
+  /**
+   * 两个来源：
+   *   · 客户端（Electron）：window.LM.gpu → 主进程直接写系统设置，不需要 HTTP 服务器
+   *   · 浏览器：/api/gpu/* → 本机 server.mjs
+   * 面板逻辑只认这三个动作，其余都在 renderBody 里。
+   */
+  const nativeGpu = () => (window.LM && window.LM.isClient && window.LM.gpu ? window.LM.gpu : null);
+
+  async function gpuStatus() {
+    const g = nativeGpu();
+    if (g) return g.status();
+    const res = await fetch('/api/gpu/status', { headers: { Accept: 'application/json' } });
+    return res.json();
+  }
+
+  async function gpuApply(exe) {
+    const g = nativeGpu();
+    if (g) return g.apply(exe, 2);
+    const res = await fetch('/api/gpu/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-lm-token': token },
+      body: JSON.stringify({ exe }),
+    });
+    return res.json();
+  }
+
+  async function gpuRestore(exe) {
+    const g = nativeGpu();
+    if (g) return g.restore(exe);
+    const res = await fetch('/api/gpu/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-lm-token': token },
+      body: JSON.stringify({ exe }),
+    });
+    return res.json();
+  }
+
   function chipHtml(report) {
     const m = VERDICT_META[report.verdict] || VERDICT_META.unknown;
     return `<span class="gpubtn__dot" style="background:${m.dot}"></span>${m.label}`;
@@ -85,7 +122,7 @@
       ? `<div class="gpu-sec">
           <div class="gpu-sec__t">换成独显（Windows，一键）</div>
           <div id="gpuBrowsers" class="gpu-browsers"><p class="gpu-dim">读取中…</p></div>
-          <p class="gpu-dim gpu-note">改动只影响当前用户（等同系统设置里那个开关），<b>完全退出浏览器（所有窗口）后再打开本页</b>才生效。</p>
+          <p class="gpu-dim gpu-note">改动只影响当前用户（等同系统设置里那个开关），<b>完全退出浏览器（所有窗口）后再打开本页</b>才生效。${nativeGpu() ? '（客户端已直接写入系统设置）' : ''}</p>
         </div>`
       : `<div class="gpu-sec">
           <div class="gpu-sec__t">换成独显</div>
@@ -162,13 +199,8 @@
     note.textContent = kind === 'apply' ? '正在写入…' : '正在还原…';
     (row || mask.querySelector('#gpuBrowsers')).appendChild(note);
     try {
-      const res = await fetch('/api/gpu/' + kind, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-lm-token': token },
-        body: JSON.stringify({ exe }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+      const data = kind === 'apply' ? await gpuApply(exe) : await gpuRestore(exe);
+      if (!data || !data.ok) throw new Error((data && data.error) || '操作失败');
       note.textContent = kind === 'apply'
         ? '已设为高性能 —— 请完全退出浏览器（所有窗口）再打开本页。'
         : '已还原成「让 Windows 决定」—— 同样需要重启浏览器。';
@@ -183,9 +215,8 @@
 
   async function loadStatus() {
     try {
-      const res = await fetch('/api/gpu/status', { headers: { Accept: 'application/json' } });
-      status = await res.json();
-      windows = status.windows === true;
+      status = await gpuStatus();
+      windows = status && status.windows === true;
     } catch (_) {
       status = null;
       windows = null;
@@ -196,14 +227,20 @@
   async function open() {
     shell().classList.add('is-open');
     renderBody((api && api.gpuReport()) || { verdict: 'unknown' });
-    try {
-      const res = await fetch('/api/gpu/session', { headers: { Accept: 'application/json' } });
-      const data = await res.json();
-      token = data.token || '';
-      windows = data.windows === true;
-    } catch (_) {
-      token = '';
-      windows = null;
+    if (nativeGpu() || (window.LM && window.LM.isClient)) {
+      // 客户端：主进程写入，不需要令牌
+      token = 'client';
+      windows = true;
+    } else {
+      try {
+        const res = await fetch('/api/gpu/session', { headers: { Accept: 'application/json' } });
+        const data = await res.json();
+        token = data.token || '';
+        windows = data.windows === true;
+      } catch (_) {
+        token = '';
+        windows = null;
+      }
     }
     await loadStatus();
     if (api && api.probeGPU) api.probeGPU().then(() => renderBody(api.gpuReport())).catch(() => {});

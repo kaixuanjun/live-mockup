@@ -49,7 +49,7 @@ try {
     `${round.kind} v${round.version} · ${round.count} 个关键帧 · ${round.duration}s`);
   check(round.same && round.hasEase, '打包 → 解析：数值与缓动完全一致');
 
-  await evaluate(`(() => {
+  await evaluate(`(async () => {
     document.querySelector('[data-move="orbit"]').click();
     let captured = null;
     const orig = HTMLAnchorElement.prototype.click;
@@ -58,6 +58,8 @@ try {
       else orig.call(this);
     };
     document.querySelector('#moveExportBtn').click();
+    // download() 是异步的（客户端分支要先 await），让一个宏任务再拆拦截
+    await new Promise((r) => setTimeout(r, 60));
     HTMLAnchorElement.prototype.click = orig;
     window.__moveDl = captured;
   })()`);

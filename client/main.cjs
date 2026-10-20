@@ -16,6 +16,8 @@ const { spawn } = require('node:child_process');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 
+const { pathToFileURL } = require('node:url');
+const pathToUrl = (p) => pathToFileURL(p).href;
 const PUBLIC = path.join(__dirname, '..', 'public');
 const SMOKE = process.argv.includes('--smoke');
 const SMOKE_ENCODE = process.argv.includes('--encode');
@@ -324,6 +326,58 @@ function registerIpc() {
     return { ok: true };
   });
 
+  /* ── 显卡偏好：客户端里没有 HTTP 服务器，直接在主进程写注册表 ── */
+  // gpu-prefs.mjs 是 ESM，CJS 主进程用动态 import 取
+  let gpuMod = null;
+  const loadGpu = async () => {
+    if (!gpuMod) gpuMod = await import(pathToUrl(path.join(__dirname, '..', 'gpu-prefs.mjs')));
+    return gpuMod;
+  };
+
+  ipcMain.handle('lm:gpu:status', async () => {
+    try {
+      const mod = await loadGpu();
+      const snap = await mod.snapshot(win && win.webContents ? win.webContents.getUserAgent() : '');
+      return { ok: true, windows: mod.isWindows(), ...snap };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  /**
+   * 写注册表交给「纯 Node 子进程」：同样的 electron.exe 加 ELECTRON_RUN_AS_NODE=1，
+   * 这样跑的就是普通 Node，不会碰上浏览器进程里 reg add 被拒的怪问题。
+   */
+  function runGpuWrite(action, exe, level) {
+    return new Promise((resolve) => {
+      const script = path.join(__dirname, 'node', 'gpu-write.cjs');
+      const child = spawn(process.execPath, [script, action, String(exe || ''), String(level || 2)], {
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+        windowsHide: true,
+      });
+      let out = '';
+      let err = '';
+      child.stdout.on('data', (d) => { out += d; });
+      child.stderr.on('data', (d) => { err += d; });
+      child.on('error', (e) => resolve({ ok: false, error: '拉起写入进程失败：' + e.message }));
+      child.on('close', () => {
+        const line = out.trim().split('\n').pop() || '';
+        try {
+          resolve(JSON.parse(line));
+        } catch (_) {
+          resolve({ ok: false, error: err.trim().slice(-300) || out.trim().slice(-300) || '写入进程没有返回结果' });
+        }
+      });
+    });
+  }
+
+  ipcMain.handle('lm:gpu:apply', async (_e, { exe, level } = {}) => {
+    const lvl = Number.isFinite(Number(level)) ? Number(level) : 2;
+    return runGpuWrite('apply', exe, lvl);
+  });
+
+  ipcMain.handle('lm:gpu:restore', async (_e, { exe } = {}) => runGpuWrite('clear', exe, 2));
+
   // 主进程主动通知（导出完成等）
   ipcMain.handle('lm:notify', async (_e, { title, body }) => {
     send('lm:message', { title, body });
@@ -356,6 +410,44 @@ async function runSmoke() {
     step('页面加载', basic.hasApp && basic.hasRender && basic.hasMove, JSON.stringify(basic));
     step('原生桥接可见', basic.hasLM === true && basic.platform === process.platform, `LM.platform=${basic.platform}`);
     step('样式生效', basic.styleOk === true);
+
+    /* 显卡偏好：客户端没有 HTTP 服务器，直接走 IPC → gpu-prefs.mjs → 注册表 */
+    const gpuAction = process.env.LM_GPU_TEST || '';
+    const gpuExe = process.env.LM_GPU_EXE || 'C:\\Windows\\System32\\notepad.exe';
+    if (gpuAction) {
+      const gp = await win.webContents.executeJavaScript(`(async () => {
+        const st = await window.LM.gpu.status();
+        const act = ${JSON.stringify(gpuAction)} === 'apply'
+          ? await window.LM.gpu.apply(${JSON.stringify(gpuExe)}, 2)
+          : await window.LM.gpu.restore(${JSON.stringify(gpuExe)});
+        return { status: st, action: act };
+      })()`);
+      const okSt = !!(gp.status && gp.status.ok && gp.status.windows === true);
+      step('显卡状态可读', okSt, `来源=客户端IPC · 浏览器 ${(gp.status && gp.status.browsers || []).length} 个 · ${(gp.status && gp.status.family) || ''}`);
+      const okAct = !!(gp.action && gp.action.ok);
+      step(gpuAction === 'apply' ? '显卡偏好写入' : '显卡偏好还原', okAct,
+        JSON.stringify(gp.action && (gp.action.after || gp.action.error)).slice(0, 90));
+      out.gpu = { exe: gpuExe, action: gp.action };
+    }
+
+    /* 显卡面板：客户端里必须走 IPC，不能打 /api/gpu/*（app:// 下没有那个服务器） */
+    const panel = await win.webContents.executeJavaScript(`(async () => {
+      document.querySelector('#gpuBtn').click();
+      await new Promise((r) => setTimeout(r, 700));
+      const mask = document.querySelector('#gpuMask');
+      const rows = document.querySelectorAll('#gpuMask .gpu-row').length;
+      const token = (window.GpuPanel || {}).token;
+      const status = (window.GpuPanel || {}).status;
+      const applyBtn = !!document.querySelector('#gpuMask [data-gpu-apply]');
+      // 先记下来再关，否则读到的是关闭后的状态
+      const open = !!mask && mask.classList.contains('is-open');
+      const close = document.querySelector('#gpuMask .gpucard__x');
+      if (close) close.click();
+      return { open, rows, token, applyBtn,
+               source: status && status.family, browsers: (status && status.browsers || []).length };
+    })()`);
+    step('显卡面板走客户端 IPC', panel.open === true && panel.token === 'client' && panel.rows > 0,
+      `rows=${panel.rows} · 来源=${panel.source} · 浏览器 ${panel.browsers} 个 · token=${panel.token}`);
 
     const info = await win.webContents.executeJavaScript('window.LM.info()');
     step('原生信息', !!info && !!info.electron, `electron ${info && info.electron} · chrome ${info && info.chrome} · ffmpeg ${info && info.ffmpeg && info.ffmpeg.version}`);
@@ -421,11 +513,44 @@ async function runSmoke() {
 
 /* ───────────── 生命周期 ───────────── */
 
+const REG_PROBE = process.argv.includes('--reg-probe');
+
 const STAGE = process.argv.includes('--smoke-main')
   ? 'main'
   : process.argv.includes('--smoke-win') ? 'win' : 'full';
 
 app.whenReady().then(async () => {
+  if (REG_PROBE) {
+    const { execFile } = require('node:child_process');
+    const REG = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'reg.exe');
+    const KEY = 'HKCU\\Software\\Microsoft\\DirectX\\UserGpuPreferences';
+    const run = (args) => new Promise((r) => {
+      execFile(REG, args, { windowsHide: true }, (err, stdout, stderr) => {
+        r({ err: err ? { message: err.message, code: err.code, killed: err.killed, signal: err.signal } : null, stdout, stderr });
+      });
+    });
+    console.log('PROBE env PATH=' + String(process.env.PATH).slice(0, 120));
+    console.log('PROBE cwd=' + process.cwd());
+    console.log('PROBE query=' + JSON.stringify(await run(['query', KEY])).slice(0, 200));
+    // A) 简单值名
+    console.log('PROBE add-simple=' + JSON.stringify(await run(['add', KEY, '/v', 'lmtest', '/t', 'REG_SZ', '/d', 'GpuPreference=2;', '/f'])));
+    console.log('PROBE del-simple=' + JSON.stringify(await run(['delete', KEY, '/v', 'lmtest', '/f'])));
+    // B) .reg 导入（值名带反斜杠）
+    const fsp2 = require('node:fs/promises');
+    const regWrite = path.join(require('node:os').tmpdir(), 'lm-set.reg');
+    const regDel = path.join(require('node:os').tmpdir(), 'lm-del.reg');
+    await fsp2.writeFile(regWrite, 'Windows Registry Editor Version 5.00\r\n\r\n[HKEY_CURRENT_USER\\Software\\Microsoft\\DirectX\\UserGpuPreferences]\r\n"C:\\\\Windows\\\\System32\\\\notepad.exe"="GpuPreference=2;"\r\n', 'utf16le');
+    await fsp2.writeFile(regDel, 'Windows Registry Editor Version 5.00\r\n\r\n[HKEY_CURRENT_USER\\Software\\Microsoft\\DirectX\\UserGpuPreferences]\r\n"C:\\\\Windows\\\\System32\\\\notepad.exe"=-\r\n', 'utf16le');
+    console.log('PROBE import-set=' + JSON.stringify(await run(['import', regWrite])));
+    console.log('PROBE after-set=' + JSON.stringify(await run(['query', KEY, '/v', 'C:\\Windows\\System32\\notepad.exe'])).slice(0, 160));
+    console.log('PROBE import-del=' + JSON.stringify(await run(['import', regDel])));
+    console.log('PROBE after-del=' + JSON.stringify(await run(['query', KEY, '/v', 'C:\\Windows\\System32\\notepad.exe'])).slice(0, 160));
+    console.log('PROBE add=' + JSON.stringify(await run(['add', KEY, '/v', 'C:\\Windows\\System32\\notepad.exe', '/t', 'REG_SZ', '/d', 'GpuPreference=2;', '/f'])));
+    console.log('PROBE del=' + JSON.stringify(await run(['delete', KEY, '/v', 'C:\\Windows\\System32\\notepad.exe', '/f'])));
+    app.exit(0);
+    return;
+  }
+
   if (STAGE === 'main') {
     console.log('MAIN_OK version=' + process.versions.electron + ' platform=' + process.platform);
     const ff = await findFfmpeg();
