@@ -16,7 +16,11 @@
     "test:devserver": "node tools/devserver-test.mjs",
     "test:parity": "node tools/parity-test.mjs",
     "test:gpu": "node tools/gpu-test.mjs",
-    "test:move": "node tools/move-test.mjs"
+    "test:move": "node tools/move-test.mjs",
+    "test:client": "node tools/client-test.mjs",
+    "test:android": "node tools/android-test.mjs",
+    "client:win": "cd client && npm start",
+    "client:android": "powershell -ExecutionPolicy Bypass -File scripts/android-build.ps1"
   },
   "engines": {
     "node": ">=20"

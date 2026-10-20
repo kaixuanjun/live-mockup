@@ -19,6 +19,24 @@ node server.mjs        # 或 npm start
 
 打开 <http://localhost:4321>。默认端口 4321，可用 `PORT=5000 node server.mjs` 改。建议用 Chrome / Edge（导出要用 `getDisplayMedia`）。
 
+## 客户端（Windows / Android）
+
+浏览器有三条硬限制：导出只能 WebCodecs（VP9/WebM）、取帧靠 `<video>` seek、
+用哪块显卡由系统决定。所以同一个 `public/` 现在有三套壳：
+
+| 形态 | 怎么跑 | 编码 | 状态 |
+| --- | --- | --- | --- |
+| 浏览器 | `node server.mjs` → http://localhost:4321 | WebCodecs → WebM | 一直在用 |
+| **Windows 客户端** | `npm run client:win`（首次 `cd client && npm install`） | **原生 ffmpeg → H.264/MP4，CRF 可控** | ✅ 冒烟 13 项通过 |
+| **Android 客户端** | `npm run client:android`（首次 `scripts\android-sdk-setup.ps1`） | WebView 的 WebCodecs（原生 MediaCodec 排下一轮） | ✅ APK 构建通过（3.7 MB） |
+
+三端共用 `public/` 的界面与业务逻辑；壳只加浏览器没有的能力，靠
+`window.LM && window.LM.isClient` 做能力检测，检测不到就自动退回浏览器路径。
+
+细节见 [client/README.md](client/README.md) 与 [client-android/README.md](client-android/README.md)。
+测试：`npm run test:client`（真的起 Electron、真的导出 MP4 再 ffprobe 校验）、
+`npm run test:android`（校验 APK 包名/版本/资源）。
+
 ## 三步做出片子
 
 **1. 选页面**

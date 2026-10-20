@@ -8,3 +8,9 @@ client/dist/
 client/.smoke-out.txt
 client/.smoke-err.txt
 client/.min-*
+client-android/node_modules/
+client-android/android/.gradle/
+client-android/android/build/
+client-android/android/app/build/
+client-android/android/local.properties
+client-android/android/capacitor-cordova-android-plugins/
