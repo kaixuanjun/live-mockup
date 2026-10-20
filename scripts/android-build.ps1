@@ -1,4 +1,4 @@
-# LiveMockup Android 构建（一条命令）
+﻿# LiveMockup Android 构建（一条命令）
 #
 # 为什么要有这个脚本：这个仓库的路径带中文（桌面-凤纹方尊），
 # Android Gradle Plugin 默认会对非 ASCII 路径直接报错。脚本负责：
@@ -69,14 +69,15 @@ $task = if ($Release) { 'assembleRelease' } else { 'assembleDebug' }
 & .\gradlew.bat $task --no-daemon
 $code = $LASTEXITCODE
 Pop-Location
-if ($code -ne 0) { throw "Gradle 构建失败（退出码 $code）" }
+if ($code -ne 0) { throw "gradle build failed, exit code $code" }
 
 $apk = Join-Path $androidDir $apkRel
 if (-not (Test-Path $apk)) { throw "没找到产物：$apk" }
 
 $dist = Join-Path $repo 'dist'
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
-$target = Join-Path $dist ('livemockup-android-' + (if ($Release) { 'release' } else { 'debug' }) + '.apk')
+$suffix = if ($Release) { 'release' } else { 'debug' }
+$target = Join-Path $dist ('livemockup-android-' + $suffix + '.apk')
 Copy-Item $apk $target -Force
 
 $size = [math]::Round((Get-Item $target).Length / 1MB, 2)

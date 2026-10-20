@@ -1,4 +1,4 @@
-# Android 工具链安装（Windows 版，仅首次）
+﻿# Android 工具链安装（Windows 版，仅首次）
 #
 # 目标：装一套能 `gradlew assembleDebug` 的 Android SDK 到 ASCII 路径（默认 C:\android-sdk）。
 # 为什么必须 ASCII：Electron / Gradle / aapt2 在中文路径上都有踩坑记录，

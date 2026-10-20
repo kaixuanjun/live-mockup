@@ -58,6 +58,14 @@ try {
   }
 
   check(existsSync(SYNCED), 'web 资源已同步进原生工程', path.relative(ROOT, SYNCED));
+
+  // 打包进 APK 的那份 exporter.js 必须带安卓保存分支，否则手机上导出会静默失败
+  const syncedExporter = path.join(ANDROID, 'app', 'src', 'main', 'assets', 'public', 'js', 'exporter.js');
+  if (existsSync(syncedExporter)) {
+    const src = readFileSync(syncedExporter, 'utf8');
+    check(/Capacitor/.test(src) && /saveOnAndroid/.test(src),
+      '打包进 APK 的 UI 带安卓保存分支（Capacitor Filesystem）');
+  }
   if (existsSync(SYNCED)) {
     const html = readFileSync(SYNCED, 'utf8');
     check(/js\/app\.js/.test(html) && /js\/render\.js/.test(html), '入口页引用了编辑器脚本');
