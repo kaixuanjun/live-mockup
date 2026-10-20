@@ -18,9 +18,7 @@
     "test:gpu": "node tools/gpu-test.mjs",
     "test:move": "node tools/move-test.mjs",
     "test:client": "node tools/client-test.mjs",
-    "test:android": "node tools/android-test.mjs && node tools/android-export-test.mjs",
-    "client:win": "cd client && npm start",
-    "client:android": "powershell -ExecutionPolicy Bypass -File scripts/android-build.ps1"
+    "client:win": "cd client && npm start"
   },
   "engines": {
     "node": ">=20"

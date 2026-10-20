@@ -4,7 +4,7 @@
  * 只暴露具体能力，不暴露 Node —— 页面代码仍然当自己是浏览器环境，
  * 只是多了一个 window.LM，能力检测不到就自动退回浏览器路径。
  */
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const toBytes = (data) => {
   if (data instanceof Uint8Array) return data;
@@ -42,6 +42,21 @@ contextBridge.exposeInMainWorld('LM', {
     frame: (pixels) => ipcRenderer.invoke('lm:job:frame', pixels),
     end: () => ipcRenderer.invoke('lm:job:end'),
     abort: () => ipcRenderer.invoke('lm:job:abort'),
+  },
+
+  /**
+   * 拖/选进来的文件在磁盘上的真实路径（Electron 32+ 才有 webUtils）。
+   * 页面拿它交给 ffmpeg 做原生解码；拿不到（合成 Blob）就返回空串，调用方退回 <video> seek。
+   */
+  filePath: (file) => {
+    try { return webUtils.getPathForFile(file) || ''; } catch (_) { return ''; }
+  },
+
+  /** 原生解码：一次 spawn，顺序取帧（不用 currentTime 来回 seek） */
+  decode: {
+    begin: (opts) => ipcRenderer.invoke('lm:decode:begin', opts),
+    frame: () => ipcRenderer.invoke('lm:decode:frame'),
+    end: () => ipcRenderer.invoke('lm:decode:end'),
   },
 
   /** 显卡偏好（客户端直接写系统设置，不需要 HTTP 服务器） */

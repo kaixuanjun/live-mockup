@@ -146,7 +146,29 @@ try {
     check(false, '原生编码冒烟能跑完', (enc.out || '').split('\n').slice(-6).join(' | ').slice(0, 300));
     throw new Error('skip');
   }
-  encRes.steps.filter((s) => /原生编码|准备测试视频/.test(s.name)).forEach((s) => check(s.ok, '  ' + s.name, s.detail));
+  encRes.steps
+    .filter((s) => /原生编码|准备测试视频|取帧对比|ffmpeg 解码|生成 1080p/.test(s.name))
+    .forEach((s) => check(s.ok, '  ' + s.name, s.detail));
+
+  // 取帧速度：ffmpeg 顺序解码 vs <video> seek（数字直接打出来，别只给个通过/不通过）
+  if (encRes.compare) {
+    const { seek, raw, jpeg } = encRes.compare;
+    check(jpeg < seek, '取帧速度：ffmpeg(jpeg 通道) 快于 <video> seek',
+      `seek ${seek}ms/帧 · ffmpeg raw ${raw}ms/帧（IPC 拖后腿）· ffmpeg jpeg ${jpeg}ms/帧（约 ${(seek / jpeg).toFixed(1)}×）`);
+  }
+
+  const pipelineMp4 = path.join(CLIENT, '.smoke', 'decode-encode.mp4');
+  if (existsSync(pipelineMp4)) {
+    let ok = false;
+    try {
+      const r = await exec('ffprobe', ['-v', 'error', '-select_streams', 'v:0',
+        '-show_entries', 'stream=codec_name,width,height', '-of', 'csv=p=0', pipelineMp4], { windowsHide: true });
+      ok = /h264/.test(r.stdout) && /1920,1080/.test(r.stdout.replace(/\s/g, ''));
+    } catch (_) { ok = false; }
+    check(ok, '解码+编码产物是 1920×1080 H.264', path.basename(pipelineMp4));
+  } else {
+    check(false, '解码+编码整条链路产物存在', pipelineMp4);
+  }
 
   const exists = existsSync(OUT_MP4);
   const size = exists ? statSync(OUT_MP4).size : 0;

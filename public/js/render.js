@@ -422,7 +422,8 @@
       // 只有「真的在缩小」才值得花高质量过滤（medium 比 low 贵 4 倍）。
       // 贴图分辨率是按投影后尺寸算的，多数情况是 1:1 或放大，low 就够，看不出差别。
       ctx.imageSmoothingQuality = dw >= video.videoWidth * 0.9 ? 'low' : 'medium';
-      ctx.drawImage(video, dx, dy, dw, dh);
+      // video 可以是 <video>，也可以是原生解码出来的帧包装 { videoWidth, videoHeight, __frame }
+      ctx.drawImage(video.__frame || video, dx, dy, dw, dh);
     }
     ctx.restore();
   }
@@ -1061,6 +1062,48 @@ void main() {
 
   /** 兜底：WebCodecs 不可用（非安全上下文等）时退回实时录制，行为和旧版一致 */
   /**
+   * 客户端原生解码：ffmpeg 顺序吐原始帧，绕开 <video>.currentTime 的 seek 开销。
+   *
+   * 每帧一次 IPC（Uint8Array）→ ImageData（零拷贝视图）→ createImageBitmap。
+   * 帧是「按输出帧率重采样好」的，所以和第 i 个输出帧一一对应，不需要时间换算。
+   */
+  function nativeDecoder(api, opts) {
+    let begun = null;
+    let W = 0;
+    let H = 0;
+    let transport = 'raw';
+    return {
+      async start() {
+        if (!begun) {
+          begun = api.decode.begin(opts).then((r) => {
+            if (!r || r.ok === false) throw new Error((r && r.error) || '原生解码启动失败');
+            W = r.width;
+            H = r.height;
+            transport = r.transport || 'raw';
+            return r;
+          });
+        }
+        return begun;
+      },
+      async next() {
+        await this.start();
+        const r = await api.decode.frame();
+        if (!r || r.ok === false) throw new Error((r && r.error) || '读帧失败');
+        const u8 = r.data instanceof Uint8Array ? r.data : new Uint8Array(r.data);
+        // jpeg：一帧只有 ~100KB，解出来就是目标尺寸；raw：RGBA 直通（零拷贝视图）
+        const bitmap = transport === 'jpeg'
+          ? await createImageBitmap(new Blob([u8], { type: 'image/jpeg' }))
+          : await createImageBitmap(new ImageData(
+            new Uint8ClampedArray(u8.buffer, u8.byteOffset, u8.byteLength), W, H));
+        return { videoWidth: bitmap.width, videoHeight: bitmap.height, __frame: bitmap };
+      },
+      dispose() {
+        try { api.decode.end(); } catch (_) {}
+      },
+    };
+  }
+
+  /**
    * 客户端原生编码：每帧原始像素直接写进 ffmpeg 的 stdin，出 H.264 / MP4。
    *
    * 为什么要它：浏览器里只有 WebCodecs（VP9/WebM，码率有上限、容器受限），
@@ -1086,6 +1129,8 @@ void main() {
         crf,
         preset: opts.preset || 'veryfast',
         defaultName: opts.defaultName || 'livemockup.mp4',
+        // 指定了输出路径就跳过保存对话框（脚本 / 测试 / 批量导出用）
+        outPath: opts.outPath || '',
       });
       if (!r || r.ok === false) throw new Error((r && r.error) || '原生编码启动失败');
       if (r.canceled) { const e = new Error('已取消'); e.aborted = true; throw e; }
@@ -1169,6 +1214,8 @@ void main() {
     backend: '',
     // 最近一次用到的编码通道：native / webcodecs / recorder
     lastSink: '',
+    // 最近一次用到的取帧方式：ffmpeg / ''（<video> seek）
+    lastDecoder: '',
   };
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1211,7 +1258,7 @@ void main() {
       video, aspect = '9:16', camera = [], bg = 'aurora', color = 'midnight',
       model = 'auto', autoSize = null, duration = 5, fps: fpsIn = 30,
       onProgress, onPhase, preferGL = true, gridHint = 0, glare = false,
-      native = false,
+      native = false, decode = null,
     } = o;
 
     if (!video) throw new Error('没有可渲染的视频');
@@ -1240,6 +1287,8 @@ void main() {
 
     let scene;
     let sink;
+    let dec = null;
+    let lastDecodeInfo = null;
     try {
       scene = createScene({
         W, H, camera: cam, bg, color, model, autoSize, duration: Math.max(0.1, duration),
@@ -1271,6 +1320,25 @@ void main() {
       }
       state.sink = sink;
       state.lastSink = sink.kind;
+
+      // 原生解码：有真实文件路径 + 客户端解码能力才启用
+      if (decode && decode.path && window.LM && window.LM.decode && window.LM.isClient) {
+        const src = decode.source || {};
+        dec = nativeDecoder(window.LM, {
+          path: decode.path,
+          fps,
+          width: src.width || 0,
+          height: src.height || 0,
+          // jpeg：每帧 ~100KB，实测 1080p 比 raw 快 10 倍（IPC 才是瓶颈）
+          transport: decode.transport || 'jpeg',
+          quality: decode.quality == null ? 2 : decode.quality,
+        });
+        const info = await dec.start();
+        state.decoder = 'ffmpeg';
+        state.lastDecoder = 'ffmpeg';
+        notifyGpu();
+        lastDecodeInfo = { width: info.width, height: info.height, fps: info.fps };
+      }
     } catch (err) {
       // 准备阶段就失败（画布建不出来 / 编码器配置不被接受）也要把锁放掉
       state.active = false;
@@ -1359,10 +1427,16 @@ void main() {
           let t = (i + 0.5) / fps;
           if (srcDuration) t = Math.min(t, Math.max(0, srcDuration - 1 / (fps * 2)));
           const ts = performance.now();
-          await seekVideo(video, t);
+          let paintSrc = video;
+          if (dec) {
+            // 原生解码：顺序拿一帧，不 seek、不等合成器
+            paintSrc = await dec.next();
+          } else {
+            await seekVideo(video, t);
+          }
           if (state.aborted) throw abortError();
           const tp = performance.now();
-          scene.paint(i / fps, video);
+          scene.paint(i / fps, paintSrc);
           const te = performance.now();
           await sink.encode(scene.out, i);
           const tc = performance.now();
@@ -1403,6 +1477,8 @@ void main() {
       try { sink.dispose(); } catch (_) {}
       throw err;
     } finally {
+      if (dec) { try { dec.dispose(); } catch (_) {} }
+      // 保留最后一次用过的解码方式，界面/测试要读（只在下次渲染开始时覆盖）
       scene.dispose();
       state.sink = null;
       state.active = false;
@@ -1428,6 +1504,8 @@ void main() {
     get backend() { return state.backend; },
     /** 最近一次导出用的编码通道：'native'（客户端 ffmpeg）/ 'webcodecs' / 'recorder' */
     get lastSink() { return state.lastSink; },
+    /** 最近一次导出用的取帧方式：'ffmpeg'（顺序解码）/ ''（<video> seek） */
+    get decoder() { return state.decoder; },
     /**
      * 实际用的 GPU 适配器。`discrete` 为 true 表示落在独显上；
      * 为 null 表示读不到名字（部分浏览器屏蔽了 WEBGL_debug_renderer_info），
@@ -1452,6 +1530,8 @@ void main() {
       try { fn(gpuReport()); } catch (_) {}
       return () => gpuListeners.delete(fn);
     },
+    /** 只给测速用：拿一帧要走多少个毫秒（内部正常流程不受影响） */
+    __seekForTest: (v, t) => seekVideo(v, t),
     /** 手动再探一次（页面加载后设备热切换、或想读最新名字时用） */
     probeGPU,
     /** 分阶段平均耗时（ms/帧）：seek 解码定位、paint 合成、submit 交给编码器、wait 编码排队 */

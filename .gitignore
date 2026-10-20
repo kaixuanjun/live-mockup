@@ -1,4 +1,4 @@
-﻿.shots/
+.shots/
 *.log
 node_modules/
 
@@ -14,3 +14,8 @@ client-android/android/build/
 client-android/android/app/build/
 client-android/android/local.properties
 client-android/android/capacitor-cordova-android-plugins/
+client/bin/
+public/.smoke/
+.cache/
+dist/installed/
+dist/

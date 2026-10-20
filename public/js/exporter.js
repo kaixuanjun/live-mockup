@@ -171,35 +171,6 @@
    * 客户端里不再往「下载」目录扔文件：走原生保存对话框（用户自己选位置）。
    * 浏览器里保持原来的 a[download] 行为；原生保存失败也退回下载，别让人拿不到文件。
    */
-  /** Blob → base64（Android 的 Filesystem 插件只能收 base64 字符串） */
-  function blobToBase64(blob) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const s = String(reader.result || '');
-        resolve(s.slice(s.indexOf(',') + 1));
-      };
-      reader.onerror = () => reject(reader.error || new Error('读取 Blob 失败'));
-      reader.readAsDataURL(blob);
-    });
-  }
-
-  /** 安卓客户端：写进系统「下载/LiveMockup」，WebView 里 a[download] 是不生效的 */
-  async function saveOnAndroid(blob, name) {
-    const fs = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem;
-    if (!fs) return null;
-    const data = await blobToBase64(blob);
-    const target = 'LiveMockup/' + name;
-    await fs.writeFile({ path: target, data, directory: 'DOCUMENTS', recursive: true });
-    let uri = '';
-    try {
-      const r = await fs.getUri({ path: target, directory: 'DOCUMENTS' });
-      uri = (r && r.uri) || '';
-    } catch (_) {}
-    if (window.LM && window.LM.toast) window.LM.toast('已保存到「文档/LiveMockup/' + name + '」');
-    return { ok: true, platform: 'android', path: target, uri, canceled: false };
-  }
-
   async function download(blob, name) {
     // 1) Electron 客户端：原生保存对话框
     if (window.LM && window.LM.isClient && window.LM.save) {
@@ -214,13 +185,6 @@
       }
     }
 
-    // 2) Android 客户端：Capacitor Filesystem
-    try {
-      const saved = await saveOnAndroid(blob, name);
-      if (saved) return saved;
-    } catch (err) {
-      console.warn('[exporter] 安卓保存失败，改用下载：', err && err.message);
-    }
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;

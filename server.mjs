@@ -13,7 +13,7 @@ import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { snapshot as gpuSnapshot, setLevel as gpuSetLevel, clearLevel as gpuClearLevel, isWindows as gpuIsWindows } from './gpu-prefs.mjs';
+import { snapshot as gpuSnapshot, setLevel as gpuSetLevel, clearLevel as gpuClearLevel, isWindows as gpuIsWindows } from './client/lib/gpu-prefs.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, 'public');

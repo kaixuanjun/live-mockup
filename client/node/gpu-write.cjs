@@ -14,7 +14,7 @@ const { pathToFileURL } = require('node:url');
 
 (async () => {
   const [action, exe, level] = process.argv.slice(2);
-  const mod = await import(pathToFileURL(path.join(__dirname, '..', '..', 'gpu-prefs.mjs')).href);
+  const mod = await import(pathToFileURL(path.join(__dirname, '..', 'lib', 'gpu-prefs.mjs')).href);
   if (action === 'apply') {
     const r = await mod.setLevel(String(exe || ''), Number(level) || 2);
     process.stdout.write(JSON.stringify({ ok: true, ...r }));

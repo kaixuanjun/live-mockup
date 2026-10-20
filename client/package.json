@@ -1,19 +1,81 @@
-﻿{
+{
   "name": "livemockup-client",
   "productName": "LiveMockup",
   "version": "0.1.0",
   "private": true,
-  "description": "LiveMockup 桌面客户端（Windows 先行，Android 后续）",
-  
+  "description": "LiveMockup Windows 客户端（Electron + 原生 ffmpeg 编解码）",
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
     "smoke": "electron . --smoke",
     "smoke:encode": "electron . --smoke --encode",
-    "dist": "electron-builder --win --x64"
+    "dist": "electron-builder --win --x64",
+    "dist:dir": "electron-builder --win --x64 --dir"
   },
   "devDependencies": {
-    "electron": "^33.4.11"
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.livemockup.win",
+    "productName": "LiveMockup",
+    "directories": {
+      "output": "../dist",
+      "buildResources": "build"
+    },
+    "asar": false,
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "node/**/*",
+      "lib/**/*",
+      "package.json",
+      "!**/.smoke/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../public",
+        "to": "public",
+        "filter": [
+          "**/*",
+          "!.smoke/**"
+        ]
+      },
+      {
+        "from": "bin",
+        "to": "bin",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "LiveMockup"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.${ext}"
+    }
   }
 }
-

@@ -346,7 +346,15 @@
       const relink = project.camera.length > 0
         && prev.w === meta.w && prev.h === meta.h
         && (!prev.name || prev.name === label);
-      project.video = { name: label, w: meta.w, h: meta.h, duration: meta.duration };
+      // 客户端里能拿到磁盘真实路径：交给 ffmpeg 原生解码用。
+      // 浏览器/合成 Blob 拿不到，就留空，导出时自动退回 <video> seek。
+      let diskPath = '';
+      try {
+        if (source && typeof source !== 'string' && window.LM && window.LM.filePath) {
+          diskPath = window.LM.filePath(source) || '';
+        }
+      } catch (_) {}
+      project.video = { name: label, w: meta.w, h: meta.h, duration: meta.duration, path: diskPath };
       project.page = { input: label, src, startSrc: src };
       project.actions = [];
       player.cursor = 0;
@@ -1624,6 +1632,38 @@
   }
 
   /* ── 录屏模式：canvas 内部逐帧渲染，不碰屏幕捕获、不跟墙钟 ── */
+  /**
+   * 原生解码要的源尺寸：按视频自身分辨率，超过 6MP 才等比缩，
+   * 免得 4K 源每帧 24MB 在 IPC 上来回搬。
+   */
+  function decodeSourceSize(w, h) {
+    const W = Math.round(Number(w) || 0);
+    const H = Math.round(Number(h) || 0);
+    if (!W || !H) return { width: 0, height: 0 };
+    const cap = 6.0e6;
+    if (W * H <= cap) return { width: W - (W % 2), height: H - (H % 2) };
+    const s = Math.sqrt(cap / (W * H));
+    return {
+      width: Math.round((W * s) / 2) * 2,
+      height: Math.round((H * s) / 2) * 2,
+    };
+  }
+
+  /** 客户端 + 有真实路径 → 走 ffmpeg 顺序解码；否则返回 null（退回 <video> seek） */
+  function nativeDecodeOpts() {
+    if (!(window.LM && window.LM.isClient && window.LM.decode)) return null;
+    const path = project.video.path;
+    if (!path) return null;
+    return {
+      path,
+      source: decodeSourceSize(project.video.w, project.video.h),
+      // jpeg 通道：1080p 一帧 ~100KB（raw 要 8MB），实测取帧快 5 倍；
+      // q=2 对这种「UI 录屏」肉眼基本无损，最终还要过一次 H.264。
+      transport: 'jpeg',
+      quality: 2,
+    };
+  }
+
   /** 客户端里优先用原生 ffmpeg 编码（H.264/MP4，不受浏览器容器与码率限制） */
   function nativeEncodeOpts() {
     if (!(window.LM && window.LM.isClient && window.LM.job)) return false;
@@ -1674,6 +1714,7 @@
         autoSize: spec.autoSize,
         glare: project.ui.glare !== false,
         native: nativeEncodeOpts(),
+        decode: nativeDecodeOpts(),
         duration,
         fps: targetFps,
         onProgress: paintExportProgress,
@@ -1686,7 +1727,8 @@
       if (result && result.native) {
         // 原生编码：文件已经落盘，不再走「下载」
         const mb = (result.size / 1048576).toFixed(1);
-        toast(`导出完成 · ${outW}×${outH} · ${result.frames} 帧 · ${mb} MB · H.264 (CRF ${result.crf}) · 用时 ${secs.toFixed(1)}s`, 6400);
+        const how = Render.decoder === 'ffmpeg' ? 'ffmpeg 解码' : 'video 取帧';
+        toast(`导出完成 · ${outW}×${outH} · ${result.frames} 帧 · ${mb} MB · H.264 (CRF ${result.crf}) · ${how} · 用时 ${secs.toFixed(1)}s`, 6400);
         try { await window.LM.reveal(result.path); } catch (_) {}
       } else {
         Exporter.download(result, stampName() + '.webm');
@@ -1916,7 +1958,8 @@
     if (!p || !p.page) throw new Error('不是有效的 LiveMockup 工程');
     const migrated = migrateCameraUnits(p);
     project.mode = p.mode === 'video' ? 'video' : 'page';
-    project.video = { name: '', w: 0, h: 0, duration: 0, ...(p.video || {}) };
+    // 旧工程里不会存 path（那是本机绝对路径），载入后需要重新选文件才有原生解码
+    project.video = { name: '', w: 0, h: 0, duration: 0, path: '', ...(p.video || {}) };
     project.page = { ...project.page, ...p.page };
     project.device = p.device || 'phone';
     project.color = p.color || 'midnight';

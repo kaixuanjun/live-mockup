@@ -1,7 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<resources>
-    <string name="app_name">LiveMockup</string>
-    <string name="title_activity_main">LiveMockup</string>
-    <string name="package_name">com.livemockup.app</string>
-    <string name="custom_url_scheme">com.livemockup.app</string>
-</resources>

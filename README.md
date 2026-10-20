@@ -19,23 +19,23 @@ node server.mjs        # 或 npm start
 
 打开 <http://localhost:4321>。默认端口 4321，可用 `PORT=5000 node server.mjs` 改。建议用 Chrome / Edge（导出要用 `getDisplayMedia`）。
 
-## 客户端（Windows / Android）
+## Windows 客户端
 
 浏览器有三条硬限制：导出只能 WebCodecs（VP9/WebM）、取帧靠 `<video>` seek、
-用哪块显卡由系统决定。所以同一个 `public/` 现在有三套壳：
+用哪块显卡由系统决定。所以同一个 `public/` 现在有两套壳（安卓端已放弃，代码在 git 历史里）：
 
 | 形态 | 怎么跑 | 编码 | 状态 |
 | --- | --- | --- | --- |
 | 浏览器 | `node server.mjs` → http://localhost:4321 | WebCodecs → WebM | 一直在用 |
-| **Windows 客户端** | `npm run client:win`（首次 `cd client && npm install`） | **原生 ffmpeg → H.264/MP4，CRF 可控** | ✅ 冒烟 13 项通过 |
-| **Android 客户端** | `npm run client:android`（首次 `scripts\android-sdk-setup.ps1`） | WebView 的 WebCodecs（原生 MediaCodec 排下一轮） | ✅ APK 构建通过（3.7 MB） |
-
-三端共用 `public/` 的界面与业务逻辑；壳只加浏览器没有的能力，靠
+| **Windows 客户端** | 装 `dist\LiveMockup-*.exe`，或 `npm run client:win` | **原生 ffmpeg 解码 + H.264/MP4 编码** | ✅ 冒烟 25 项通过 |
+两端共用 `public/` 的界面与业务逻辑；壳只加浏览器没有的能力，靠
 `window.LM && window.LM.isClient` 做能力检测，检测不到就自动退回浏览器路径。
 
-细节见 [client/README.md](client/README.md) 与 [client-android/README.md](client-android/README.md)。
-测试：`npm run test:client`（真的起 Electron、真的导出 MP4 再 ffprobe 校验）、
-`npm run test:android`（校验 APK 包名/版本/资源）。
+客户端里三个数（1080p 实测）：**取帧 68ms → 13ms/帧**（ffmpeg 顺序解码替代 `<video>` seek）、
+**编码出 H.264/MP4**（CRF 可控，替代 WebCodecs 的 VP9/WebM）、**导出不再走浏览器下载**。
+
+细节见 [client/README.md](client/README.md)。
+测试：`npm run test:client`（真的起 Electron、真的导出 MP4 再 ffprobe 校验）。
 
 ## 三步做出片子
 

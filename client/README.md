@@ -81,6 +81,48 @@ render.js  render()  ──每帧──▶  nativeSink
 返回的是 `{ native: true, path, size, frames, crf }` 而不是 Blob —— 文件已经落盘，
 界面只负责提示和「在文件夹中显示」。
 
+## 取帧：ffmpeg 顺序解码（不再 `<video>` seek）
+
+浏览器版每帧都要 `video.currentTime = t` 再等 `seeked`，1080p 实测 **68ms/帧**。
+客户端里让 ffmpeg 一次性顺序解码、按输出帧率出帧，实测 **13ms/帧（约 5 倍）**。
+
+中间踩了一个反直觉的坑：瓶颈不在解码，在**进程间传帧**。
+
+| 传输方式 | 每帧体积 | 实测 | 说明 |
+| --- | --- | --- | --- |
+| `raw`（RGBA 原始像素） | 7.9 MB | **182 ms/帧** | 解码很快，但传 8MB 成了瓶颈 |
+| `jpeg`（q=2 的 mjpeg） | 94 KB | **13 ms/帧** | 体积小两个数量级，IPC 不再拖后腿 |
+
+所以默认走 jpeg 通道（`decode.transport = "jpeg"`、`quality = 2`）。对「UI 录屏」肉眼基本无损，
+最终还要过一次 H.264；要绝对无损可把 `render.js` 里 `dec` 的 `transport` 改成 `"raw"`（会慢）。
+
+前提：得拿到**磁盘上的真实路径**（`webUtils.getPathForFile`）。从 `<input type=file>` / 拖拽进来
+的文件可以；合成 Blob 不行，会自动退回 `<video>` seek。
+
+## 保存到哪
+
+原生保存对话框默认落在系统「视频」目录，不再用项目目录（OneDrive / 受保护目录会被 Windows 反过来要管理员权限）。
+写失败会提示换目录，而不是丢一个 `EACCES`。
+
+> 从**受限环境**（沙箱 / 容器 / 某些远程会话）启动 exe 时，系统和 Chromium 会挡掉工作区外的写入 ——
+> 那不是程序的权限问题，用普通桌面会话（双击）启动即可。
+
+## 打包 exe
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-win.ps1
+# 产物：
+#   dist/LiveMockup-<版本>-x64.exe        NSIS 安装包（可选安装目录、建桌面快捷方式）
+#   dist/LiveMockup-<版本>-portable.exe   便携版单文件
+```
+
+脚本会把 `ffmpeg.exe` 放进 `client/bin/`（随包发布，用户不用自己装 ffmpeg），并把
+Electron / NSIS 的下载指向国内镜像。两个环境限制写死在配置里：
+
+- `signAndEditExecutable: false`：不签名也不改 exe 元数据。electron-builder 默认要下 `winCodeSign`，
+  那个包带 macOS 符号链接，普通 Windows 账户没有「创建符号链接」特权，解不开。代价是没有自定义图标/版本信息。
+- 缓存目录指到仓库内（`ELECTRON_CACHE` / `ELECTRON_BUILDER_CACHE` / `TMP`）：受限环境只允许写工作区。
+
 ## 冒烟测试
 
 ```bash
