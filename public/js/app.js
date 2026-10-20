@@ -44,6 +44,9 @@
     colorSeg: $('#colorSeg'),
     bgList: $('#bgList'),
     moveList: $('#moveList'),
+    moveExportBtn: $('#moveExportBtn'),
+    moveApplyBtn: $('#moveApplyBtn'),
+    moveFile: $('#moveFile'),
     tlPlayBtn: $('#tlPlayBtn'),
     tlAddKey: $('#tlAddKey'),
     tlClearActions: $('#tlClearActions'),
@@ -664,6 +667,55 @@
     if (!opt.silent) toast('已生成镜头关键帧，可继续微调');
   }
 
+  /* ── 运镜文件：镜头数据独立于视频 ──
+     运镜只描述「镜头怎么动」，所以存成单独的文件；换视频、换画幅都能套。
+     x/y/z 是相对画面比例（v2 单位），同一份运镜在任何分辨率上走同一条轨迹。 */
+
+  function movePack() {
+    return MoveTrack.pack(project.camera, project.duration, {
+      device: project.device,
+      aspect: effectiveAspect(),
+    });
+  }
+
+  function exportMove() {
+    if (!window.MoveTrack) return toast('运镜模块没加载，刷新一下页面', 3600);
+    if (!project.camera.length) return toast('时间轴上还没有镜头关键帧，先做一条运镜再导出', 3600);
+    const data = movePack();
+    const name = MoveTrack.fileName(project.camera.length);
+    Exporter.download(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), name);
+    toast(`已导出运镜 · ${project.camera.length} 个关键帧 · ${MoveTrack.lengthOf(project.camera, project.duration).toFixed(1)} 秒（只有镜头数据，可套到任何片子上）`, 5600);
+  }
+
+  /**
+   * 套用运镜文件。
+   * @param {File} file
+   * @param {boolean} keepSpeed true = 保持原速（只把起点对齐 0）；false = 按比例铺到当前时间轴
+   */
+  async function applyMoveFile(file, keepSpeed) {
+    if (!window.MoveTrack) return toast('运镜模块没加载，刷新一下页面', 3600);
+    try {
+      const parsed = MoveTrack.parse(await file.text());
+      const srcLen = MoveTrack.lengthOf(parsed.keys, parsed.duration);
+      const keys = keepSpeed
+        ? MoveTrack.shiftToZero(parsed.keys, project.duration)
+        : MoveTrack.rescale(parsed.keys, srcLen, project.duration);
+      project.camera = keys;
+      normalizeCamera();
+      selection = null;
+      applyCameraAt(project.t);
+      refreshTimeline();
+      renderInspector();
+      autosave();
+      const how = keepSpeed ? '保持原速' : `按比例铺到 ${project.duration.toFixed(1)} 秒`;
+      toast(`已套用运镜 · ${keys.length} 个关键帧 · 原长 ${srcLen.toFixed(1)} 秒 → ${how}`, 5600);
+      return { keys: keys.length, srcLen, mode: keepSpeed ? 'keepSpeed' : 'rescale' };
+    } catch (err) {
+      toast('运镜文件读不了：' + (err && err.message ? err.message : err), 5600);
+      return null;
+    }
+  }
+
   /* ═══════════════ 时间轴 / 播放 ═══════════════ */
 
   function refreshTimeline() {
@@ -699,7 +751,8 @@
     const cur = Stage.sample(project.camera, project.t);
     el.innerHTML = `<span>播放头 ${fmt(project.t)}</span><span class="sep">·</span>`
       + `<span>${inSeg ? `段内 ${prog}%` : (nextKey ? '段外（在帧上）' : '末帧')}</span>`;
-    dim.textContent = `此刻机位 x${Math.round(cur.x)} y${Math.round(cur.y)} ry${Math.round(cur.ry)}° ${cur.scale.toFixed(2)}×`;
+    const fr = outFrame();
+    dim.textContent = `此刻机位 x${Math.round(cur.x * fr.w)} y${Math.round(cur.y * fr.h)} ry${Math.round(cur.ry)}° ${cur.scale.toFixed(2)}×`;
   }
 
   function seek(t, immediate = false) {
@@ -1202,13 +1255,19 @@
         renderInspector();
       };
 
+      $$('.val[data-k]', box).forEach((cell) => {
+        cell.addEventListener('click', () => beginValueEdit(cell));
+      });
+
       $$('input[type="range"]', box).forEach((inp) => {
         inp.addEventListener('input', () => {
           const key = inp.dataset.k;
           const v = parseFloat(inp.value);
           if (Math.abs(project.t - k.t) > 0.02) seek(k.t, false);
           k[key] = v;
-          inp.parentElement.querySelector('.val').textContent = fmtVal(key, v);
+          const cell = inp.parentElement.querySelector('.val');
+          cell.textContent = fmtVal(key, v);
+          cell.dataset.raw = String(v);
           applyCameraAt(project.t);
           refreshTimeline();
           autosave();
@@ -1324,12 +1383,96 @@
     return `<div class="insp-row">
       <label>${label}</label>
       <input type="range" data-k="${key}" min="${min}" max="${max}" step="${step}" value="${value}">
-      <span class="val">${fmtVal(key, value)}</span>
+      <span class="val" data-k="${key}" data-raw="${value}" title="点一下直接输入，比拖滑块准">${fmtVal(key, value)}</span>
     </div>`;
+  }
+
+  /* ── 数值输入：内部值 ↔ 面板上的数字 ── */
+
+  /** 内部值 → 输入框里的纯数字（x/y/z 换成 px，角度一位小数，缩放两位） */
+  function valToText(key, v) {
+    const f = outFrame();
+    if (key === 'x') return String(Math.round(v * f.w));
+    if (key === 'y') return String(Math.round(v * f.h));
+    if (key === 'z') return String(Math.round(v * f.persp));
+    if (key === 'scale') return Number(v).toFixed(2);
+    return String(Math.round(Number(v) * 10) / 10);
+  }
+
+  /** 输入框里的文字 → 内部值；容忍 `12°` `632px` `1.21×` 这种带单位的写法 */
+  function textToVal(key, text, fallback) {
+    const digits = String(text).replace(/[^0-9.+-]/g, '');
+    const n = Number.parseFloat(digits);
+    if (!Number.isFinite(n)) return fallback;
+    const f = outFrame();
+    if (key === 'x') return n / f.w;
+    if (key === 'y') return n / f.h;
+    if (key === 'z') return n / f.persp;
+    return n;
+  }
+
+  /**
+   * 把一个读数格变成输入框：Enter / 失焦提交，Esc 取消，自动按滑块范围夹住。
+   * 拖滑块永远有像素级误差，所以数值必须能直接敲。
+   */
+  function beginValueEdit(span) {
+    if (!span || span.dataset.editing === '1' || !span.dataset.k) return;
+    const row = span.parentElement;
+    const range = row && row.querySelector('input[type="range"]');
+    const k = project.camera[selection && selection.kind === 'cam' ? selection.index : -1];
+    if (!range || !k) return;
+
+    const key = span.dataset.k;
+    const before = Number(span.dataset.raw);
+    span.dataset.editing = '1';
+
+    const inp = document.createElement('input');
+    inp.type = 'number';
+    inp.className = 'val-edit';
+    inp.inputMode = 'decimal';
+    inp.value = valToText(key, before);
+    inp.step = key === 'scale' ? '0.01' : (key === 'x' || key === 'y' || key === 'z') ? '1' : '0.5';
+    span.hidden = true;
+    row.appendChild(inp);
+    inp.focus();
+    inp.select();
+
+    let closed = false;
+    const finish = (commit) => {
+      if (closed) return;
+      closed = true;
+      const min = Number(range.min);
+      const max = Number(range.max);
+      const wanted = commit ? textToVal(key, inp.value, before) : before;
+      const next = Math.min(max, Math.max(min, Number.isFinite(wanted) ? wanted : before));
+      inp.remove();
+      span.hidden = false;
+      span.dataset.editing = '0';
+      if (!commit || next === before) return;
+      if (Math.abs(project.t - k.t) > 0.02) seek(k.t, false);
+      k[key] = next;
+      range.value = String(next);
+      span.dataset.raw = String(next);
+      span.textContent = fmtVal(key, next);
+      applyCameraAt(project.t);
+      refreshTimeline();
+      refreshReadout();
+      autosave();
+    };
+
+    inp.addEventListener('keydown', (e) => {
+      e.stopPropagation();   // 别让时间轴的快捷键吃掉按键
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    inp.addEventListener('blur', () => finish(true));
   }
   function fmtVal(key, v) {
     if (key === 'scale') return v.toFixed(2) + '×';
-    if (key === 'ry' || key === 'rx' || key === 'rz') return Math.round(v) + '°';
+    if (key === 'ry' || key === 'rx' || key === 'rz') {
+      const r = Math.round(v);
+      return (Math.abs(v - r) < 0.05 ? r : v.toFixed(1)) + '°';
+    }
     const f = outFrame();
     if (key === 'x') return Math.round(v * f.w) + 'px';
     if (key === 'y') return Math.round(v * f.h) + 'px';
@@ -2028,6 +2171,19 @@
       autosave();
     });
 
+    // 运镜文件：导出 / 套用（Alt = 保持原速）
+    dom.moveExportBtn?.addEventListener('click', () => { exportMove(); autosave(); });
+    let moveKeepSpeed = false;
+    dom.moveApplyBtn?.addEventListener('click', (e) => {
+      moveKeepSpeed = !!e.altKey;
+      if (dom.moveFile) dom.moveFile.click();
+    });
+    dom.moveFile?.addEventListener('change', (e) => {
+      const f = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (f) applyMoveFile(f, moveKeepSpeed);
+    });
+
     dom.addKeyBtn.addEventListener('click', addKeyFromCurrent);
     dom.tlAddKey.addEventListener('click', addKeyFromCurrent);
 
@@ -2341,6 +2497,12 @@
 
   /* 供测试与脚本调用 */
   window.App = {
+    /** 当前运镜的打包结果（导出按钮用的就是它） */
+    movePack,
+    /** 直接套用一份运镜（传 JSON 文本，方便脚本/测试） */
+    applyMoveText(text, keepSpeed) {
+      return applyMoveFile({ text: () => Promise.resolve(String(text)) }, !!keepSpeed);
+    },
     /** 等价于界面上的「导入」：只应用状态，不碰 iframe / 视频源 */
     loadProject(raw) {
       applyProject(raw);

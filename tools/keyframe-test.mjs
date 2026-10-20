@@ -251,6 +251,82 @@ try {
   ok('框选后一次删除所选', p.camera.length === total - boxed, `${total} → ${p.camera.length}`);
   ok('框选只删了框内的帧', p.camera.every((k) => k.t > 1.2),
     p.camera.map((k) => k.t.toFixed(2)).join(', '));
+
+  /* ── 数值格可以直接输入（拖滑块不准） ── */
+  await b.evaluate(`App.seek(0)`);
+  await sleep(200);
+  await b.evaluate(`document.querySelector('#tlAddKey').click()`);
+  await sleep(400);
+  const cellSel = '#inspectorBody .val[data-k="x"]';
+  const openCell = async () => {
+    const r = await b.rect(cellSel);
+    await b.mouse(r.x, r.y);
+    await sleep(220);
+    return b.evaluate(`(() => {
+      const inp = document.querySelector('#inspectorBody .val-edit');
+      return inp ? { value: inp.value, focused: document.activeElement === inp } : null;
+    })()`);
+  };
+  const curX = async () => b.evaluate(`(() => {
+    const t = App.state.t;
+    const k = App.state.camera.find((x) => Math.abs(x.t - t) < 0.05) || App.state.camera[0];
+    return k.x;
+  })()`);
+
+  const opened = await openCell();
+  ok('点读数格会变成输入框并聚焦', !!opened && opened.focused, JSON.stringify(opened));
+
+  const beforeX = await curX();
+  await b.type('300');
+  await b.key('Enter', 'Enter', 13);
+  await sleep(300);
+  const typed = await b.evaluate(`(() => ({
+    x: App.state.camera.find((k) => Math.abs(k.t - App.state.t) < 0.05).x,
+    text: document.querySelector('#inspectorBody .val[data-k="x"]').textContent,
+    range: document.querySelector('#inspectorBody input[type="range"][data-k="x"]').value,
+    editing: !!document.querySelector('#inspectorBody .val-edit'),
+  }))()`);
+  const frameW = await b.evaluate(`Render.canvasSize(App.state.effectiveAspect).w`);
+  ok('输入 300 后内部值精确等于 300/画宽',
+    Math.abs(typed.x - 300 / frameW) < 1e-6, `x=${typed.x.toFixed(6)} 期望 ${(300 / frameW).toFixed(6)}`);
+  // range 的 value 会被 step（0.001）吸附，所以允许一个 step 的误差
+  ok('输入后读数与滑块同步', typed.text === '300px'
+    && Math.abs(Number(typed.range) - typed.x) <= 0.0011 && !typed.editing,
+    `${typed.text} · range=${Number(typed.range).toFixed(4)} · step 吸附误差 ≤0.001`);
+
+  await openCell();
+  await b.type('999');
+  await b.key('Escape', 'Escape', 27);
+  await sleep(260);
+  const afterEsc = await curX();
+  ok('Esc 取消，不改值', Math.abs(afterEsc - typed.x) < 1e-9, `${afterEsc.toFixed(6)}`);
+
+  await openCell();
+  await b.type('99999');
+  await b.key('Enter', 'Enter', 13);
+  await sleep(300);
+  const clamped = await b.evaluate(`(() => ({
+    x: App.state.camera.find((k) => Math.abs(k.t - App.state.t) < 0.05).x,
+    text: document.querySelector('#inspectorBody .val[data-k="x"]').textContent,
+  }))()`);
+  ok('超范围输入被夹在滑块上下限', Math.abs(clamped.x - 0.6) < 1e-9, `x=${clamped.x} · ${clamped.text}`);
+
+  // 角度也能输入（带单位写法也认）
+  const ryCell = '#inspectorBody .val[data-k="ry"]';
+  const rr = await b.rect(ryCell);
+  await b.mouse(rr.x, rr.y);
+  await sleep(200);
+  await b.type('12.5°');
+  await b.key('Enter', 'Enter', 13);
+  await sleep(300);
+  const ry = await b.evaluate(`(() => ({
+    ry: App.state.camera.find((k) => Math.abs(k.t - App.state.t) < 0.05).ry,
+    text: document.querySelector('#inspectorBody .val[data-k="ry"]').textContent,
+  }))()`);
+  ok('角度可以输入（且容忍 ° 后缀）', Math.abs(ry.ry - 12.5) < 1e-9 && ry.text === '12.5°',
+    `ry=${ry.ry} · ${ry.text}`);
+
+  void beforeX;
 } catch (e) {
   ok('测试未抛异常', false, e.message);
 } finally {

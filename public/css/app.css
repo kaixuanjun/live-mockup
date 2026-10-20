@@ -1027,3 +1027,23 @@ body.exporting .stage__foot { display: none !important; }
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
   background: rgba(255,255,255,.07); padding: 1px 5px; border-radius: 4px;
 }
+
+/* 运镜文件（导出 / 套用） */
+.moves--io { margin-top: 8px; grid-template-columns: 1fr 1fr; }
+/* .moves 的最后一个是整行按钮；这里两个都要占一列 */
+.moves--io button:last-child { grid-column: auto; }
+.moves--io button { font-size: 11.5px; }
+.hint--dim { color: var(--muted); opacity: .85; margin-top: 6px; }
+
+/* 滑块旁的数值：可点击直接输入 */
+.insp-row .val { cursor: text; border-radius: 5px; padding: 2px 4px; transition: background .12s, color .12s; }
+.insp-row .val:hover { background: rgba(255,255,255,.07); color: var(--text); }
+.insp-row .val-edit {
+  width: 58px; flex: none; text-align: right;
+  font-family: var(--mono); font-size: 10.5px;
+  background: #0c0e13; border: 1px solid var(--accent); color: var(--text);
+  border-radius: 6px; padding: 3px 5px; outline: none;
+  -moz-appearance: textfield;
+}
+.insp-row .val-edit::-webkit-outer-spin-button,
+.insp-row .val-edit::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }

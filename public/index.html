@@ -114,6 +114,12 @@
         <button data-move="reset">复位居中</button>
       </div>
       <p class="hint">一键生成镜头关键帧，再在右侧微调。</p>
+      <div class="moves moves--io">
+        <button id="moveExportBtn" title="把整条运镜存成独立文件（只有镜头数据，不含视频）">导出运镜</button>
+        <button id="moveApplyBtn" title="套用一份运镜文件；默认按比例铺到当前时间轴，按住 Alt 保持原速">套用运镜</button>
+      </div>
+      <p class="hint hint--dim">运镜文件是纯镜头数据：换任何视频、任何画幅都能直接套。</p>
+      <input type="file" id="moveFile" accept="application/json,.json" hidden>
     </section>
   </aside>
 
@@ -270,6 +276,7 @@
 <script src="/js/timeline.js"></script>
 <script src="/js/exporter.js"></script>
 <script src="/js/webm-muxer.js"></script>
+<script src="/js/movetrack.js"></script>
 <script src="/js/render.js"></script>
 <script src="/js/app.js"></script>
 <script src="/js/gpu-panel.js"></script>

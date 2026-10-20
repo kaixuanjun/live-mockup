@@ -15,7 +15,8 @@
     "test:proxy": "node tools/proxy-test.mjs",
     "test:devserver": "node tools/devserver-test.mjs",
     "test:parity": "node tools/parity-test.mjs",
-    "test:gpu": "node tools/gpu-test.mjs"
+    "test:gpu": "node tools/gpu-test.mjs",
+    "test:move": "node tools/move-test.mjs"
   },
   "engines": {
     "node": ">=20"
