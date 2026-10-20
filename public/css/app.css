@@ -875,6 +875,11 @@ body.no-glare .device__glare { display: none; }
 body.is-frozen { pointer-events: none; cursor: progress; }
 body.is-frozen .exportmask { pointer-events: auto; cursor: default; }
 /* 鍐荤粨鏃舵妸缂栨帓鍖鸿棌鎺夛紙鐢?visibility 鑰屼笉鏄?display锛氬竷灞€杩樺湪锛屼笉浼氶噸鎺掞級銆?   绾€ц兘鑰冭檻锛氳垶鍙版槸 3D 鍙樻崲 + 澶氬眰娓愬彉 + 涓€涓?<video>锛屾覆鏌撳惊鐜瘡娆¤鍑轰富绾跨▼锛?   娴忚鍣ㄩ兘瑕侀噸鐢讳竴閬嶉〉闈紝鐧界櫧鍜岄€愬抚娓叉煋鎶?CPU銆傚脊绐?95% 涓嶉€忔槑锛岃棌璧锋潵鐪嬩笉鍑哄尯鍒€?   椤舵爮鍜?toast 涓嶈棌锛氶《鏍忎笉鍦ㄦ崟鑾疯寖鍥村唴锛堢綉椤垫ā寮忚繕瑕佹樉绀恒€屽綍鍒?x%銆嶏級锛?   toast 鏄粨鏉熸椂鎵嶅嚭鐜扮殑鎻愮ず锛屽喕缁撴湡闂磋緭鍏ュ凡閿佹锛屼笉浼氬啀鍐掓柊 toast銆?*/
+/* 客户端录页面模式：要抓画面，所以只锁输入、不能像冻结那样把布局藏起来 */
+body.is-capturing { pointer-events: none; cursor: progress; }
+body.is-capturing .layout,
+body.is-capturing .timeline { visibility: visible; }
+
 body.is-frozen .layout,
 body.is-frozen .timeline { visibility: hidden; }
 

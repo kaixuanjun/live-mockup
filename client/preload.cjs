@@ -52,6 +52,11 @@ contextBridge.exposeInMainWorld('LM', {
     try { return webUtils.getPathForFile(file) || ''; } catch (_) { return ''; }
   },
 
+  /** 页面模式：抓本窗口画面（页面导出用，替代 getDisplayMedia） */
+  page: {
+    shot: (rect) => ipcRenderer.invoke('lm:page:shot', rect),
+  },
+
   /** 原生解码：一次 spawn，顺序取帧（不用 currentTime 来回 seek） */
   decode: {
     begin: (opts) => ipcRenderer.invoke('lm:decode:begin', opts),

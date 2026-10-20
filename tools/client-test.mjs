@@ -170,6 +170,32 @@ try {
     check(false, '解码+编码整条链路产物存在', pipelineMp4);
   }
 
+  /* ── 页面模式导出：客户端抓自己的画面（不走 getDisplayMedia） ── */
+  const pageMp4 = path.join(CLIENT, '.smoke', 'page.mp4');
+  const pageRun = await runElectron(['--smoke', '--page-export'], {
+    LM_USER_DATA: path.join(OUT_DIR, 'userData-page'),
+    LM_SMOKE_OUT: pageMp4,
+  }, 300000);
+  const pageRes = parseSmoke(pageRun.out);
+  if (pageRes) {
+    pageRes.steps.filter((x) => /页面模式|capturePage/.test(x.name))
+      .forEach((x) => check(x.ok, '  ' + x.name, x.detail));
+  }
+  if (existsSync(pageMp4)) {
+    let pageOk = false;
+    try {
+      const r = await exec('ffprobe', ['-v', 'error', '-select_streams', 'v:0',
+        '-show_entries', 'stream=codec_name,width,height,duration', '-of', 'csv=p=0', pageMp4], { windowsHide: true });
+      const [codec, w, h, dur] = r.stdout.trim().split(',');
+      pageOk = codec === 'h264' && Number(w) > 300 && Number(dur) > 1;
+      check(pageOk, '页面模式成片是有效 H.264 视频', `${w}×${h} · ${Number(dur).toFixed(2)}s · ${codec}`);
+    } catch (_) {
+      check(false, '页面模式成片可解析', 'ffprobe 失败');
+    }
+  } else {
+    check(false, '页面模式成片已生成', pageMp4);
+  }
+
   const exists = existsSync(OUT_MP4);
   const size = exists ? statSync(OUT_MP4).size : 0;
   check(exists && size > 2000, 'MP4 文件已落盘', `${path.relative(ROOT, OUT_MP4)} · ${(size / 1024).toFixed(0)} KB`);

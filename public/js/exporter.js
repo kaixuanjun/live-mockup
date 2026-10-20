@@ -70,9 +70,106 @@
     state.raf = requestAnimationFrame(drawFrame);
   }
 
-  async function start({ stageEl, aspect = '9:16', fps = 60, bitrate = 16_000_000, onBeforeRecord }) {
+  /**
+   * 客户端页面录制：不碰系统屏幕捕获（Electron 里 getDisplayMedia 默认 NotSupportedError），
+   * 而是让主进程用 capturePage 抓「舞台矩形」那一块，逐帧喂给 ffmpeg。
+   *
+   * 关键点：按**墙钟**补帧。capturePage 一帧要十几毫秒，抓慢了不能把时间轴拉长，
+   * 所以每个 tick 按已流逝时间补齐该有的帧数（复制当前画面），成片时长才和页面演示一致。
+   */
+  const client = {
+    job: null, // { ctx, canvas, W, H, fps, frames, timer, t0, duration, stageEl, path, last }
+  };
+
+  function isClientCapture() {
+    return !!(window.LM && window.LM.isClient && window.LM.page && window.LM.page.shot && window.LM.job);
+  }
+
+  async function startClientCapture({ stageEl, aspect, fps, duration, onBeforeRecord }) {
+    const size = (window.Render && Render.canvasSize) ? Render.canvasSize(aspect) : { w: 1920, h: 1080 };
+    const W = size.w;
+    const H = size.h;
+    if (onBeforeRecord) await onBeforeRecord();
+
+    const beg = await window.LM.job.begin({
+      width: W, height: H, fps, crf: 16, preset: 'veryfast',
+      defaultName: 'livemockup-page.mp4',
+    });
+    if (!beg || beg.ok === false) throw new Error((beg && beg.error) || '无法开始录制');
+    if (beg.canceled) { const e = new Error('已取消'); e.name = 'AbortError'; throw e; }
+
+    const cv = document.createElement('canvas');
+    cv.width = W;
+    cv.height = H;
+    const ctx = cv.getContext('2d', { alpha: false, willReadFrequently: true });
+
+    client.job = {
+      ctx, canvas: cv, W, H, fps: Math.max(1, fps), frames: 0, pushed: 0,
+      timer: 0, t0: performance.now(), duration: Math.max(0.4, duration),
+      stageEl, path: beg.path, last: null, stopped: false,
+    };
+
+    const tick = async () => {
+      const job = client.job;
+      if (!job || job.stopped) return;
+      const rect = job.stageEl.getBoundingClientRect();
+      const shot = await window.LM.page.shot({
+        x: Math.round(rect.left), y: Math.round(rect.top),
+        width: Math.round(rect.width), height: Math.round(rect.height),
+      });
+      if (!job || job.stopped) return;
+      if (shot && shot.ok && shot.data) {
+        const bitmap = await createImageBitmap(new Blob([shot.data], { type: 'image/jpeg' }));
+        ctx.fillStyle = '#0b0c10';
+        ctx.fillRect(0, 0, W, H);
+        ctx.drawImage(bitmap, 0, 0, W, H);
+        bitmap.close && bitmap.close();
+        job.last = ctx.getImageData(0, 0, W, H);
+      }
+      // 按墙钟补齐帧数：慢的时候复制当前画面，别把时间轴拉长
+      const elapsed = (performance.now() - job.t0) / 1000;
+      const want = Math.min(Math.round(elapsed * job.fps), Math.round(job.duration * job.fps));
+      if (job.last && want > job.pushed) {
+        while (job.pushed < want) {
+          const r = await window.LM.job.frame(job.last.data);
+          if (r && r.ok === false) throw new Error(r.error || '写帧失败');
+          job.pushed += 1;
+          job.frames = job.pushed;
+        }
+      }
+      if (!job.stopped && elapsed < job.duration) job.timer = setTimeout(tick, Math.max(0, 1000 / job.fps));
+    };
+
+    tick();
+    return { width: W, height: H, native: true, path: beg.path };
+  }
+
+  async function stopClientCapture() {
+    const job = client.job;
+    if (!job) return null;
+    job.stopped = true;
+    clearTimeout(job.timer);
+    client.job = null;
+    // 补满时间轴（防止最后一拍还没到）
+    const total = Math.round(job.duration * job.fps);
+    while (job.last && job.pushed < total) {
+      const r = await window.LM.job.frame(job.last.data);
+      if (r && r.ok === false) break;
+      job.pushed += 1;
+    }
+    const end = await window.LM.job.end();
+    if (!end || end.ok === false) throw new Error((end && end.error) || '收尾失败');
+    return { native: true, path: end.path || job.path, size: end.size || 0, frames: end.frames || job.pushed };
+  }
+
+  async function start({ stageEl, aspect = '9:16', fps = 60, bitrate = 16_000_000, onBeforeRecord, duration = 0 }) {
+    const durationHint = duration;
+    // 客户端：抓自己的画面，不需要屏幕捕获授权
+    if (isClientCapture()) {
+      return startClientCapture({ stageEl, aspect, fps, duration: durationHint, onBeforeRecord });
+    }
     if (!navigator.mediaDevices?.getDisplayMedia) {
-      throw new Error('当前浏览器不支持屏幕捕获，请用 Chrome / Edge 打开。');
+      throw new Error('当前环境不支持屏幕捕获；客户端会走「抓自己画面」的路径，浏览器请用 Chrome / Edge。');
     }
     state.stageEl = stageEl;
     state.chunks = [];
@@ -147,6 +244,8 @@
   }
 
   function stop() {
+    // 客户端页面录制：收尾走 ffmpeg（返回 { native, path, size }）
+    if (client.job) return stopClientCapture();
     return new Promise((resolve) => {
       if (!state.recorder) return resolve(null);
       state.active = false;

@@ -1812,18 +1812,24 @@
     });
 
     try {
+      // 客户端：主进程抓「舞台矩形」那一块，直接进 ffmpeg，不用屏幕捕获、不用点共享
+      const clientCapture = !!(window.LM && window.LM.isClient && window.LM.page && window.LM.page.shot);
+
       const info = await Exporter.start({
         stageEl: dom.stage,
         aspect: effectiveAspect(),
         // 网页模式的 iframe 像素拿不到（浏览器不允许），只能屏幕捕获。
         // 30fps 已经够用，编码压力只有 60fps 的一半，不容易把界面拖住。
         fps: 30,
+        duration: project.duration,
         // 遮罩和镜头按钮盖在舞台上，会被一起录进视频 —— 录制开始前收干净，
         // 顺便把侧栏折起来让舞台吃满窗口，输出更锐利。
         onBeforeRecord: async () => {
           hideExportMask();
           document.body.classList.add('exporting');
-          setFrozen(true); // 录屏期间不许有人碰界面（点一下就会被录进去）
+          // 客户端要抓画面，不能像「冻结」那样把 .layout 藏起来，只锁输入
+          if (clientCapture) document.body.classList.add('is-capturing');
+          else setFrozen(true);
           await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
           Stage.fit();
           await sleep(180);
@@ -1870,9 +1876,10 @@
       });
       await sleep(250);
 
-      const blob = await Exporter.stop();
+      const out = await Exporter.stop();
       clearInterval(progTimer);
       document.body.classList.remove('exporting');
+      document.body.classList.remove('is-capturing');
       Stage.fit();
       dom.exportBtn.innerHTML = btnLabel;
       dom.exportBtn.classList.remove('is-busy');
@@ -1881,9 +1888,14 @@
         pageAbort = false;
         return toast('已取消导出，没有生成文件', 3000);
       }
-      if (!blob || !blob.size) return toast('没有捕获到画面');
-      Exporter.download(blob, `livemockup-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '')}.webm`);
-      toast(`导出完成 · ${info.width}×${info.height} · ${(blob.size / 1048576).toFixed(1)} MB`, 4200);
+      if (out && out.native) {
+        toast(`导出完成 · ${info.width}×${info.height} · ${out.frames} 帧 · ${(out.size / 1048576).toFixed(1)} MB · H.264`, 6400);
+        try { await window.LM.reveal(out.path); } catch (_) {}
+        return;
+      }
+      if (!out || !out.size) return toast('没有捕获到画面');
+      Exporter.download(out, `livemockup-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '')}.webm`);
+      toast(`导出完成 · ${info.width}×${info.height} · ${(out.size / 1048576).toFixed(1)} MB`, 4200);
     } catch (err) {
       if (started) {
         try { await Exporter.stop(); } catch (_) {}
@@ -1896,6 +1908,7 @@
       clearInterval(progTimer);
       hideExportMask();
       setFrozen(false);
+      document.body.classList.remove('is-capturing');
       document.body.classList.remove('exporting');
       Stage.fit();
       dom.exportBtn.innerHTML = btnLabel;

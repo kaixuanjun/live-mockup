@@ -11,7 +11,7 @@
  * 边界：这一层只做「壳 + 原生能力」，界面和业务逻辑仍然复用 public/，
  * 所以浏览器版和客户端版是同一套 UI，不会分叉。
  */
-const { app, BrowserWindow, protocol, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, session, desktopCapturer, protocol, dialog, ipcMain, shell } = require('electron');
 const { spawn } = require('node:child_process');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
@@ -30,6 +30,8 @@ const PUBLIC = app.isPackaged
   : path.join(__dirname, '..', 'public');
 const SMOKE = process.argv.includes('--smoke');
 const SMOKE_ENCODE = process.argv.includes('--encode');
+const SMOKE_PAGE = process.argv.includes('--page');
+const SMOKE_PAGE_EXPORT = process.argv.includes('--page-export');
 
 /* ───────────── 启动前的开关 ───────────── */
 
@@ -395,6 +397,21 @@ async function startDecode(opts) {
 
 let win = null;
 
+/** 找出「本窗口」的捕获源；找不到就返回诊断信息（用于冒烟和错误提示） */
+async function pickOwnCaptureSource() {
+  const id = win && win.webContents && win.webContents.getMediaSourceId
+    ? win.webContents.getMediaSourceId()
+    : '';
+  const sources = await desktopCapturer.getSources({ types: ['window'], thumbnailSize: { width: 0, height: 0 } });
+  const source = (id && sources.find((src) => src.id === id)) || null;
+  return {
+    id,
+    source,
+    visible: !!(win && win.isVisible()),
+    sources: sources.map((src) => ({ id: src.id, name: src.name })),
+  };
+}
+
 async function createWindow() {
   win = new BrowserWindow({
     width: 1440,
@@ -419,6 +436,27 @@ async function createWindow() {
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url)) shell.openExternal(url);
     return { action: 'deny' };
+  });
+
+  /**
+   * 页面模式（网页演示）导出靠 navigator.mediaDevices.getDisplayMedia 抓窗口画面，
+   * 再按舞台矩形裁剪。浏览器里会弹「选择共享内容」，Electron 里没有这个 UI，
+   * 不装处理器就会直接抛 NotSupportedError（就是用户看到的「导出失败：not support」）。
+   * 这里直接把本窗口的画面交出去，页面自己裁剪，等于替用户点了一次「共享此标签页」。
+   */
+  session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
+    try {
+      // 用窗口自己的 mediaSourceId 精确匹配，绝不退而求其次抓「别人的窗口」
+      const picked = await pickOwnCaptureSource();
+      if (!picked.source) {
+        // 窗口不可见（隐藏/最小化）时抓不到自己，明确拒绝，让页面给出人话错误
+        callback({});
+        return;
+      }
+      callback({ video: picked.source });
+    } catch (_) {
+      callback({});
+    }
   });
 
   await win.loadURL('app://lm/index.html');
@@ -569,6 +607,19 @@ function registerIpc() {
 
   ipcMain.handle('lm:gpu:restore', async (_e, { exe } = {}) => runGpuWrite('clear', exe, 2));
 
+  /* ── 页面模式：抓自己的渲染画面（不依赖桌面捕获，也不需要用户点共享） ── */
+  ipcMain.handle('lm:page:shot', async (_e, rect) => {
+    try {
+      const useRect = rect && rect.width > 0 && rect.height > 0 ? rect : undefined;
+      const img = await win.webContents.capturePage(useRect);
+      const size = img.getSize();
+      if (!size.width || !size.height) return { ok: false, error: '画面为空' };
+      return { ok: true, data: img.toJPEG(92), width: size.width, height: size.height };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
   /* ── 原生解码：顺序取帧 ── */
   ipcMain.handle('lm:decode:begin', async (_e, opts) => {
     try {
@@ -665,6 +716,85 @@ async function runSmoke() {
         !!(gp.action && gp.action.ok),
         JSON.stringify(gp.action && (gp.action.after || gp.action.error)).slice(0, 90));
       out.gpu = { exe: gpuExe, action: gp.action };
+    }
+
+    /* ── 屏幕捕获：页面模式导出靠它 ── */
+    // --page：把窗口显示出来真抓一次（隐藏窗口没有画面可抓，只会 AbortError）
+    if (SMOKE_PAGE) {
+      win.showInactive();
+      await new Promise((r) => setTimeout(r, 900));
+    }
+    const capDiag = await pickOwnCaptureSource().catch((err) => ({ error: err.message }));
+
+    // capturePage：不经过系统的「屏幕捕获」，直接抓本窗口的渲染结果
+    let shot = null;
+    try {
+      const img = await win.webContents.capturePage();
+      const size = img.getSize();
+      shot = { w: size.width, h: size.height, bytes: img.toPNG().length };
+    } catch (err) {
+      shot = { error: err.message };
+    }
+    step('capturePage 可用（不依赖桌面捕获）', !!(shot && shot.w > 0),
+      shot.error ? String(shot.error).slice(0, 80) : `${shot.w}×${shot.h} · PNG ${(shot.bytes / 1024).toFixed(0)}KB`);
+    const cap = await exec(`(async () => {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+        return { ok: false, error: '没有 getDisplayMedia' };
+      }
+      try {
+        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+        const track = stream.getVideoTracks()[0];
+        const settings = track && track.getSettings ? track.getSettings() : {};
+        stream.getTracks().forEach((t) => t.stop());
+        return { ok: !!track, label: track && track.label, size: [settings.width, settings.height] };
+      } catch (err) {
+        return { ok: false, error: (err && (err.name + ': ' + err.message)) || String(err) };
+      }
+    })()`);
+    if (SMOKE_PAGE) win.hide();
+    // 只要不再是 NotSupportedError，就说明授权处理器接通了；
+    // 隐藏窗口下拿不到流是正常的（没有画面可抓）。
+    const notSupported = /NotSupportedError/i.test(String(cap.error || ''));
+    step('页面模式所需屏幕捕获可用',
+      SMOKE_PAGE ? cap.ok === true : !notSupported,
+      cap.ok
+        ? `${cap.label || 'window'} ${(cap.size || []).join('×')}`
+        : (notSupported
+          ? 'NotSupportedError：处理器没生效'
+          : `取不到流 · 可见=${capDiag.visible} · id=${capDiag.id || '空'} · 窗口数=${(capDiag.sources || []).length}`));
+
+    /* ── 页面模式导出：客户端不走屏幕捕获 ── */
+    if (SMOKE_PAGE_EXPORT) {
+      const pageOut = process.env.LM_SMOKE_OUT || path.join(__dirname, '.smoke', 'page.mp4');
+      await fsp.mkdir(path.dirname(pageOut), { recursive: true });
+      await fsp.rm(pageOut, { force: true });
+      process.env.LM_SMOKE_OUT = pageOut;   // 原生任务直接落盘，不弹对话框
+
+      const r = await exec(`(async () => {
+        // 上一个用例可能把工程留在「录屏」模式（localStorage 里的工程会恢复），
+        // 这里先切回网页模式并载入内置演示页
+        await App.setMode('page');
+        const demo = document.querySelector('.preset');
+        if (demo) demo.click();
+        await new Promise((r) => setTimeout(r, 1500));
+        document.querySelector('#tlAddKey').click();
+        const dur = document.querySelector('#durationInput');
+        dur.value = '2';
+        dur.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 400));
+        document.querySelector('#exportBtn').click();
+        await new Promise((r) => setTimeout(r, 11000));
+        return {
+          toast: (document.querySelector('#appToast') || {}).textContent || '',
+          busy: document.querySelector('#exportBtn').classList.contains('is-busy'),
+          capturing: document.body.classList.contains('is-capturing'),
+        };
+      })()`);
+
+      const st = await fsp.stat(pageOut).catch(() => null);
+      step('页面模式导出（客户端抓自己画面 → MP4）', !!(st && st.size > 10000),
+        `${st ? (st.size / 1024).toFixed(0) + 'KB' : '没有产物'} · toast=${String(r.toast).slice(0, 46)}`);
+      if (st && st.size) out.pageMp4 = pageOut;
     }
 
     const info = await exec('window.LM.info()');
