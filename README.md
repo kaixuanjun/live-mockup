@@ -22,7 +22,7 @@ node server.mjs        # 或 npm start
 ## Windows 客户端
 
 浏览器有三条硬限制：导出只能 WebCodecs（VP9/WebM）、取帧靠 `<video>` seek、
-用哪块显卡由系统决定。所以同一个 `public/` 现在有两套壳（安卓端已放弃，代码在 git 历史里）：
+用哪块显卡由系统决定。所以同一个 `public/` 现在有两套运行形态：
 
 | 形态 | 怎么跑 | 编码 | 状态 |
 | --- | --- | --- | --- |

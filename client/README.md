@@ -1,8 +1,7 @@
 # LiveMockup 客户端（Windows 先行）
 
-同一个 `public/` UI，两套壳：Windows 用 Electron，Android 用 Capacitor。
-壳只加「浏览器做不到的能力」，界面和核心逻辑不复制第二份 —— 浏览器里打开
-`node server.mjs` 仍然照旧可用。
+同一个 `public/` UI + Electron 壳。壳只加「浏览器做不到的能力」，界面和核心逻辑不复制第二份 ——
+浏览器里打开 `node server.mjs` 仍然照旧可用。
 
 ## 为什么值得做成客户端
 
@@ -134,7 +133,6 @@ node tools/client-test.mjs        # 从仓库根目录跑
 
 ## 还没做的（下一步）
 
-- **Android**：Capacitor 容器 + 同一套 UI；导出先走 WebView 的 WebCodecs，
-  随后加 `MediaCodec` 插件把编码搬到原生（这才是安卓真正提速的地方）。
-- **Windows 打包**：electron-builder 出安装包（需要一次 `npm i -D electron-builder`）。
-- **取帧搬到原生**：用 ffmpeg 直接解视频帧，彻底绕开 `<video>` seek 的 100ms/帧。
+- **Windows 打包**：目前 `signAndEditExecutable: false`（不签名、不改 exe 元数据），要图标/签名需另配证书。
+- **取帧**：已经从 `<video>` seek 换成 ffmpeg 顺序解码；下一步可以让 ffmpeg 直接在 GPU 上做色彩转换。
+- **跨平台**：Linux / macOS 的壳还没做（UI 和业务逻辑是现成的）。
