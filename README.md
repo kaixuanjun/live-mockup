@@ -404,6 +404,7 @@ npm run test:keyframe      # 关键帧：自动插帧 / 曲线 / 保持 / 复制
 npm run test:move          # 运镜文件：导出/解析往返 / 换时长套用 / 保持原速 / v1 换算
 npm run test:video         # 录屏模式：页内现造 WebM → 载入 / 自适应分辨率 / 时间轴双向同步
 npm run test:render        # 逐帧渲染内核：时长精度 / 每帧都渲染 / 取消 / 可 seek / 兜底
+npm run test:shadow        # 阴影贴图数值（纯 Node，不用起浏览器）：σ 校准 / 剖面 == CSS 解析解
 npm run test:parity        # 编辑器画面 == 渲染画面 + 换窗口构图不变（v2 单位的核心保证）
 npm run test:gpu           # 显卡：高性能偏好 / 徽标面板 / 注册表一键切换的写入与还原
 npm run test:export        # 导出（用假屏幕流，不需要真人点共享）

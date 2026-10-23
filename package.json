@@ -11,6 +11,7 @@
     "test:keyframe": "node tools/keyframe-test.mjs",
     "test:video": "node tools/video-test.mjs",
     "test:render": "node tools/render-test.mjs",
+    "test:shadow": "node tools/shadow-test.mjs",
     "test:export": "node tools/export-test.mjs",
     "test:proxy": "node tools/proxy-test.mjs",
     "test:devserver": "node tools/devserver-test.mjs",

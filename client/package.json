@@ -1,7 +1,7 @@
 {
   "name": "livemockup-client",
   "productName": "LiveMockup",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "LiveMockup Windows 客户端（Electron + 原生 ffmpeg 编解码）",
   "main": "main.cjs",

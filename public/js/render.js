@@ -430,30 +430,236 @@
 
   /* ───────────── 阴影 ───────────── */
 
-  const SHADOW_PAD = 52; // 阴影贴图在设备四周留的空白（设备坐标）
+  /**
+   * 阴影配方 —— **逐字抄 public/css/app.css**，单位是设备局部像素。
+   *
+   * 预览里机身阴影是两件事叠出来的：
+   *   .device__body   box-shadow: 0 30px 60px rgba(0,0,0,.5), 0 6px 14px rgba(0,0,0,.4)
+   *   .device__shadow 78%×90px 的椭圆径向渐变（rotateX(72°)）+ filter: blur(16px)
+   * .device 上挂着 transform: scale(fit)，所以 30px / 60px 这些数会跟着机身一起缩放；
+   * 导出这边必须按同一套「设备坐标」算，不能按输出画布像素算。
+   *
+   * 换算坑（这次 bug 的根）：
+   *   · CSS box-shadow 的 blur-radius r → 高斯 **σ = r/2**（滤镜规范：模糊半径 r 的
+   *     阴影等价于 σ=r/2 的高斯模糊）；
+   *   · CSS filter: blur(r) 的 r → **σ = r**（这个参数本身就是标准差）。
+   *   两套语义差一倍。旧实现只有一层写死的 blur(18px)，既没对上任何一条 CSS，
+   *   还整条漏掉了地面阴影，于是导出里那圈阴影比预览硬两三倍、死死贴着机身。
+   */
+  function shadowRecipe(bw, bh, cfg) {
+    return {
+      // 机身投影（顺序同 CSS：写在前面的是最上面那层；同色，所以叠加次序不影响结果）
+      layers: cfg.model === 'browser'
+        ? [{ dy: 30, blur: 70, a: 0.55 }]
+        : [{ dy: 30, blur: 60, a: 0.50 }, { dy: 6, blur: 14, a: 0.40 }],
+      // 地面阴影：width:78%、height:90px、bottom:-46px；rotateX(72°) 把高度压成 cos72°
+      ground: {
+        cx: bw / 2,
+        cy: bh + 1,                             // 底边往下 46，元素高 90 → 中心在底边下 1px
+        rx: bw * 0.78 / 2,
+        ry: 90 * Math.cos(72 * RAD) / 2,
+        a: 0.55,
+        // filter: blur(16px) 的 16 就是 σ；它作用在 rotateX 之前，
+        // 所以纵向那一路被压扁成 16·cos72° —— 不分开算的话这条接触阴影会比预览散一倍
+        sigma: 16,
+        sigmaY: 16 * Math.cos(72 * RAD),
+      },
+    };
+  }
+
+  const shadowSigma = (blur) => blur / 2;       // box-shadow 的 blur-radius → σ
+  const GAUSS_CUT = 3.5;                        // 3.5σ 之外肉眼看不见；留不够就会把阴影裁出直边
+
+  /* ── 高斯模糊 ─────────────────────────────────────────────── */
 
   /**
-   * 阴影每帧都在变（跟着镜头走），但它是低频的：
-   * 与其每帧对整块画布做一次 blur，不如**只做一次**模糊贴图，
-   * 之后按仿射变换整张贴上去。blur 成本从「每帧」降到「渲染开始时一次」。
+   * 为什么自己算，不用 ctx.filter = 'blur(Npx)'：
+   *   1) 它到底按用户坐标还是设备坐标算，各实现不一致，而这里必须**确切**知道 σ 是
+   *      几个设备像素 —— 差 1.7 倍就是「预览柔和、成片生硬」这个 bug 本身；
+   *   2) 不支持 filter 的引擎会静默当 'none'，整张阴影贴图退化成一块实心黑，
+   *      机身外面套一圈硬边黑框；
+   *   3) 纯 JS 算还能在 Node 里直接量（这个仓库就是靠这个守回归的）。
+   */
+  function boxPassH(src, dst, w, h, r) {
+    const inv = 1 / (r * 2 + 1);
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      let sum = 0;
+      for (let i = -r; i <= r; i++) sum += src[row + (i < 0 ? 0 : (i > w - 1 ? w - 1 : i))];
+      for (let x = 0; x < w; x++) {
+        dst[row + x] = sum * inv;
+        const out = x - r; const inn = x + r + 1;
+        sum += src[row + (inn > w - 1 ? w - 1 : inn)] - src[row + (out < 0 ? 0 : out)];
+      }
+    }
+  }
+
+  function boxPassV(src, dst, w, h, r) {
+    const inv = 1 / (r * 2 + 1);
+    for (let x = 0; x < w; x++) {
+      let sum = 0;
+      for (let i = -r; i <= r; i++) sum += src[(i < 0 ? 0 : (i > h - 1 ? h - 1 : i)) * w + x];
+      for (let y = 0; y < h; y++) {
+        dst[y * w + x] = sum * inv;
+        const out = y - r; const inn = y + r + 1;
+        sum += src[(inn > h - 1 ? h - 1 : inn) * w + x] - src[(out < 0 ? 0 : out) * w + x];
+      }
+    }
+  }
+
+  /**
+   * 三次盒式模糊逼近高斯（Kutskir 那套闭式解）：三次盒宽的方差之和正好等于 σ²，
+   * 误差在 1% 以内，成本是 O(w·h) 且与 σ 无关 —— 这里 σ 最大也就 35，来不及心疼。
+   */
+  function boxRadii(sigma) {
+    let wl = Math.floor(Math.sqrt((12 * sigma * sigma) / 3 + 1));
+    if (wl % 2 === 0) wl--;
+    if (wl < 1) wl = 1;
+    const wu = wl + 2;
+    const m = Math.round((12 * sigma * sigma - 3 * wl * wl - 12 * wl - 9) / (-4 * wl - 4));
+    const out = [];
+    for (let i = 0; i < 3; i++) out.push((((i < m) ? wl : wu) - 1) / 2);
+    return out;
+  }
+
+  /**
+   * 原地把 f 模糊成 σ，tmp 是同尺寸的临时缓冲。
+   * 纵向可以单独给 sigmaY：CSS 的 filter 作用在 transform **之前**，
+   * 所以带 rotateX(θ) 的元素糊完之后再被压扁 —— 等效于横竖两个不同的 σ。
+   */
+  function gaussBlur(f, w, h, sigma, tmp, sigmaY) {
+    const sy = sigmaY === undefined ? sigma : sigmaY;
+    const rx = sigma > 0.3 ? boxRadii(sigma) : [0, 0, 0];
+    const ry = sy > 0.3 ? boxRadii(sy) : [0, 0, 0];
+    for (let i = 0; i < 3; i++) {
+      const rH = Math.round(rx[i]);
+      const rV = Math.round(ry[i]);
+      if (!rH && !rV) continue;
+      if (rH) boxPassH(f, tmp, w, h, rH);
+      if (rV) boxPassV(rH ? tmp : f, f, w, h, rV);
+    }
+  }
+
+  /**
+   * 机身覆盖率（圆角矩形）。横向解析式抗锯齿，纵向按 1 设备像素步进 ——
+   * 反正后面还要被 σ≥7 的高斯糊一遍，纵向那半个像素的台阶看不出来。
+   */
+  function bodyCoverage(w, h, x0, y0, rw, rh, radius) {
+    const f = new Float32Array(w * h);
+    const r = Math.max(0, Math.min(radius, Math.min(rw, rh) / 2));
+    const cyTop = y0 + r;
+    const cyBot = y0 + rh - r;
+    for (let y = 0; y < h; y++) {
+      const yc = y + 0.5;
+      if (yc < y0 || yc > y0 + rh) continue;
+      let inset = 0;
+      if (yc < cyTop) inset = r - Math.sqrt(Math.max(0, r * r - (cyTop - yc) * (cyTop - yc)));
+      else if (yc > cyBot) inset = r - Math.sqrt(Math.max(0, r * r - (yc - cyBot) * (yc - cyBot)));
+      const left = x0 + inset;
+      const right = x0 + rw - inset;
+      if (right <= left) continue;
+      const row = y * w;
+      const xs = Math.max(0, Math.floor(left));
+      const xe = Math.min(w - 1, Math.ceil(right) - 1);
+      for (let x = xs; x <= xe; x++) {
+        const lo = x > left ? x : left;         // 像素 [x,x+1] 落在 [left,right] 里的比例
+        const hi = x + 1 < right ? x + 1 : right;
+        if (hi > lo) f[row + x] = hi - lo;
+      }
+    }
+    return f;
+  }
+
+  /**
+   * 地面阴影的 alpha 场：radial-gradient(ellipse at center, rgba(0,0,0,.55), transparent 68%)。
+   * farthest-corner 的椭圆终点半径经过矩形角，归一化坐标下角在 t=√2，
+   * 所以「68% 处透明」对应 t = 0.68·√2 ≈ 0.96。
+   * ox/oy 是把「设备坐标」搬到贴图像素的偏移（＝留白 pad）：配方本身仍然只写设备坐标。
+   */
+  function groundField(f, w, h, g, ox, oy) {
+    f.fill(0);
+    const edge = 0.68 * Math.SQRT2;
+    const cx = g.cx + ox;
+    const cy = g.cy + oy;
+    const xs = Math.max(0, Math.floor(cx - g.rx * edge - 1));
+    const xe = Math.min(w - 1, Math.ceil(cx + g.rx * edge + 1));
+    const ys = Math.max(0, Math.floor(cy - g.ry * edge - 1));
+    const ye = Math.min(h - 1, Math.ceil(cy + g.ry * edge + 1));
+    for (let y = ys; y <= ye; y++) {
+      const v = (y + 0.5 - cy) / g.ry;
+      const row = y * w;
+      for (let x = xs; x <= xe; x++) {
+        const u = (x + 0.5 - cx) / g.rx;
+        const t = Math.hypot(u, v);
+        if (t < edge) f[row + x] = 1 - t / edge;
+      }
+    }
+  }
+
+  /** dst = src 整体下移 dy 像素（框外补 0）；模糊是平移不变的，所以先移后糊等价 */
+  function shiftDown(src, dst, w, h, dy) {
+    dst.fill(0);
+    if (dy <= 0) { dst.set(src); return; }
+    if (dy >= h) return;
+    dst.set(src.subarray(0, w * (h - dy)), w * dy);
+  }
+
+  /**
+   * 阴影贴图：每帧都要跟着镜头变换，但它是低频的 ——
+   * 与其每帧对整块画布做一次 blur，不如**只算一次**「模糊后的 alpha」，之后整张贴上去。
+   *
+   * 贴图和机身同尺度（1 px = 1 设备单位），所以下面写的 σ 就是设备像素数，没有歧义；
+   * 输出时按透视放大（≈fit 倍）—— 糊过的渐变放大 2 倍看不出来，别为此多花 4 倍内存。
    */
   function makeShadowSprite(bw, bh, cfg) {
-    const S = SHADOW_PAD;
-    const cw = bw + S * 2;
-    const ch = bh + S * 2;
-    const k = Math.min(0.6, 520 / Math.max(cw, ch));
+    const rec = shadowRecipe(bw, bh, cfg);
+    const sig = (l) => shadowSigma(l.blur);
+
+    // 留白：必须容下「下坠 + 3.5σ」，否则高斯被贴图边界截断，阴影外缘会出现一条直边
+    let pad = GAUSS_CUT * Math.max(...rec.layers.map(sig));
+    for (const l of rec.layers) pad = Math.max(pad, l.dy + GAUSS_CUT * sig(l));
+    pad = Math.max(pad, rec.ground.cy + rec.ground.ry + GAUSS_CUT * rec.ground.sigma - bh);
+    pad = Math.max(24, Math.ceil(pad));
+
+    const w = bw + pad * 2;
+    const h = bh + pad * 2;
+    const body = bodyCoverage(w, h, pad, pad, bw, bh, cfg.radius + cfg.pad);
+    const work = new Float32Array(w * h);
+    const tmp = new Float32Array(w * h);
+    const acc = new Float32Array(w * h);
+
+    // 源覆盖（source-over）叠加：同是纯黑，只有 alpha 有意义，所以顺序无关
+    const add = (field, alpha) => {
+      for (let i = 0; i < field.length; i++) {
+        const a = field[i] * alpha;
+        if (a > 0) acc[i] = a + acc[i] * (1 - a);
+      }
+    };
+
+    for (const l of rec.layers) {
+      shiftDown(body, work, w, h, Math.round(l.dy));
+      gaussBlur(work, w, h, sig(l), tmp);
+      add(work, l.a);
+    }
+    groundField(work, w, h, rec.ground, pad, pad);
+    gaussBlur(work, w, h, rec.ground.sigma, tmp, rec.ground.sigmaY);
+    add(work, rec.ground.a);
+
     const cv = document.createElement('canvas');
-    cv.width = Math.max(2, Math.round(cw * k));
-    cv.height = Math.max(2, Math.round(ch * k));
+    cv.width = w;
+    cv.height = h;
     // 阴影贴图整张就是「模糊后的 alpha」，必须是透明画布；
     // 设成 alpha:false 会退化成一块实心黑，机身四周出现硬边黑框。
-    const ctx = ctx2d(cv, { alpha: true });
-    ctx.scale(k, k);
-    ctx.filter = 'blur(18px)';
-    ctx.fillStyle = 'rgba(0,0,0,.5)';
-    roundRect(ctx, S, S, bw, bh, cfg.radius + cfg.pad);
-    ctx.fill();
-    return { cv, cw, ch };
+    // 这里直接用 getContext 而不走 ctx2d()：本段会被 tools/shadow-test.mjs 整体切出去
+    // 在 Node 里跑，不能依赖外面的辅助函数（这块画布只 putImageData，也不需要高性能偏好）。
+    const ctx = cv.getContext('2d', { alpha: true });
+    const img = ctx.createImageData(w, h);
+    const px = img.data;
+    for (let i = 0, p = 3; i < acc.length; i++, p += 4) {
+      px[p] = acc[i] * 255;                     // RGB 留 0：阴影是纯黑，只靠 alpha 变淡
+    }
+    ctx.putImageData(img, 0, 0);
+    return { cv, cw: w, ch: h, pad };
   }
 
   /* ───────────── 镜头投影（一次算矩阵，逐点只做乘加） ───────────── */
@@ -564,13 +770,16 @@
     dst.setTransform(1, 0, 0, 1, 0, 0);
   }
 
-  function drawShadow(dst, sprite, M, bw, bh, fit) {
+  /**
+   * 贴阴影。下坠量已经烘进贴图（CSS 的 30px / 6px 偏移），这里**不再**额外平移 ——
+   * 旧的 0.06·bh 屏幕位移是为了近似那 30px，现在按真实设备坐标算，多移一次就错位。
+   */
+  function drawShadow(dst, sprite, M) {
     const W0 = sprite.cw;
     const H0 = sprite.ch;
-    const shift = bh * 0.06 * fit; // 轻微下坠，和 CSS 里那条阴影一致
-    project(M, -W0 / 2, -H0 / 2); const x00 = _px, y00 = _py + shift;
-    project(M, W0 / 2, -H0 / 2); const x10 = _px, y10 = _py + shift;
-    project(M, -W0 / 2, H0 / 2); const x01 = _px, y01 = _py + shift;
+    project(M, -W0 / 2, -H0 / 2); const x00 = _px, y00 = _py;
+    project(M, W0 / 2, -H0 / 2); const x10 = _px, y10 = _py;
+    project(M, -W0 / 2, H0 / 2); const x01 = _px, y01 = _py;
     const sw = sprite.cv.width;
     const sh = sprite.cv.height;
     dst.setTransform(
@@ -797,7 +1006,7 @@ void main() {
       gl.bindTexture(gl.TEXTURE_2D, devTex);
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, tex.cv);
 
-      const bounds = quadBounds(M, bw, bh, SHADOW_PAD * fit + 24, W, H);
+      const bounds = quadBounds(M, bw, bh, shadow.pad * fit + 24, W, H);
       const area = dirty ? unionRect(dirty, bounds) : { x: 0, y: 0, w: W, h: H };
       dirty = bounds;
 
@@ -809,8 +1018,7 @@ void main() {
       draw(bgTex, screenQuad, false);
 
       gl.enable(gl.BLEND);
-      const shift = bh * 0.06 * fit;
-      draw(shTex, corners(M, -shadow.cw / 2, -shadow.ch / 2, shadow.cw / 2, shadow.ch / 2, shift), false);
+      draw(shTex, corners(M, -shadow.cw / 2, -shadow.ch / 2, shadow.cw / 2, shadow.ch / 2, 0), false);
 
       // 机身贴图恒定开 mip。
       // 曾经用「最长边 / 贴图宽」当开关，但那在「z 推近 + 大 scale」时会算成 1.18（>0.7），
@@ -848,7 +1056,7 @@ void main() {
       const cam = poseAt(camera, t);
       const M = cameraMatrix(cam, W, H, fit, persp);
 
-      const bounds = quadBounds(M, bw, bh, SHADOW_PAD * fit + 24, W, H);
+      const bounds = quadBounds(M, bw, bh, shadow.pad * fit + 24, W, H);
       const area = dirty ? unionRect(dirty, bounds) : { x: 0, y: 0, w: W, h: H };
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalAlpha = 1;
@@ -858,7 +1066,7 @@ void main() {
 
       paintScreen(tex, cfg, video);
       if (cfg.glare) paintGlare(tex, cfg);
-      drawShadow(ctx, shadow, M, bw, bh, fit);
+      drawShadow(ctx, shadow, M);
       const grid = gridHint || gridFor(M, bw, bh);
       warpTexture(ctx, tex, bw, bh, M, grid);
       return out;
